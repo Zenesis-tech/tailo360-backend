@@ -1,0 +1,37 @@
+{
+  "name": "tailo360-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "seed:plans": "node src/scripts/seed-subscription-plans.js",
+    "seed:referrals": "node src/scripts/seed-referral-reward-config.js",
+    "migrate:global-garments": "node src/scripts/migrate-global-garments.js",
+    "create:admin": "node src/scripts/create-platform-admin.js",
+    "test": "jest --runInBand --roots tests"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.749.0",
+    "@aws-sdk/s3-request-presigner": "^3.749.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "firebase-admin": "^13.0.2",
+    "google-auth-library": "^9.15.1",
+    "helmet": "^8.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.9.5",
+    "node-cron": "^4.0.7",
+    "pdfkit": "^0.16.0",
+    "nanoid": "^3.3.8",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "mongodb-memory-server": "^10.1.4",
+    "supertest": "^7.0.0"
+  }
+}

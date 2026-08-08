@@ -1,0 +1,7 @@
+const env = require('../config/env');
+const { AppError } = require('../utils/errors');
+const mobile = (phone) => phone.replace(/^\+/, '');
+function configured() { return Boolean(env.MSG91_AUTH_KEY && env.MSG91_OTP_TEMPLATE_ID); }
+async function sendOtp(phone) { if (!configured()) throw new AppError(503, 'SMS_NOT_CONFIGURED', 'MSG91 OTP delivery is not configured.'); const url = new URL('https://control.msg91.com/api/v5/otp'); url.searchParams.set('template_id', env.MSG91_OTP_TEMPLATE_ID); url.searchParams.set('mobile', mobile(phone)); const response = await fetch(url, { method: 'POST', headers: { authkey: env.MSG91_AUTH_KEY, 'Content-Type': 'application/json' }, body: '{}' }); const data = await response.json().catch(() => ({})); if (!response.ok || data.type !== 'success') throw new AppError(502, 'SMS_DELIVERY_FAILED', 'MSG91 could not send the OTP.'); return data; }
+async function verifyOtp(phone, otp) { if (!configured()) throw new AppError(503, 'SMS_NOT_CONFIGURED', 'MSG91 OTP verification is not configured.'); const url = new URL('https://control.msg91.com/api/v5/otp/verify'); url.searchParams.set('mobile', mobile(phone)); url.searchParams.set('otp', otp); const response = await fetch(url, { headers: { authkey: env.MSG91_AUTH_KEY } }); const data = await response.json().catch(() => ({})); return response.ok && (data.type === 'success' || data.message === 'OTP verified success'); }
+module.exports = { configured, sendOtp, verifyOtp };

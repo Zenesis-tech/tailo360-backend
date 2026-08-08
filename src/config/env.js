@@ -1,0 +1,44 @@
+const path = require('path');
+const { z } = require('zod');
+require('dotenv').config({ path: path.resolve(process.cwd(), '.env') });
+
+const schema = z.object({
+  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  PORT: z.coerce.number().int().positive().default(4000),
+  MONGODB_URI: z.string().min(1),
+  JWT_ACCESS_SECRET: z.string().min(32),
+  JWT_REFRESH_SECRET: z.string().min(32),
+  JWT_ACCESS_TTL: z.string().default('15m'),
+  JWT_REFRESH_TTL: z.string().default('365d'),
+  OTP_TTL_MINUTES: z.coerce.number().int().positive().default(10),
+  OTP_PROVIDER: z.enum(['msg91', 'twilio']).default('msg91'),
+  OTP_DELIVERY_MODE: z.enum(['development', 'provider']).default('development'),
+  MSG91_AUTH_KEY: z.string().default(''),
+  MSG91_OTP_TEMPLATE_ID: z.string().default(''),
+  TWILIO_ACCOUNT_SID: z.string().default(''),
+  TWILIO_AUTH_TOKEN: z.string().default(''),
+  TWILIO_VERIFY_SERVICE_SID: z.string().default(''),
+  EXPOSE_DEV_OTP: z.string().default('false').transform((value) => value === 'true'),
+  ALLOWED_ORIGINS: z.string().default(''),
+  UPLOAD_DIR: z.string().default('uploads'),
+  MAX_FILE_SIZE_MB: z.coerce.number().positive().default(15),
+  R2_ACCOUNT_ID: z.string().optional(),
+  R2_BUCKET: z.string().optional(),
+  R2_ACCESS_KEY_ID: z.string().optional(),
+  R2_SECRET_ACCESS_KEY: z.string().optional(),
+  R2_SIGNED_URL_TTL_SECONDS: z.coerce.number().int().min(60).max(3600).default(900),
+  GOOGLE_CLIENT_IDS: z.string().default(''),
+  FIREBASE_SERVICE_ACCOUNT_JSON: z.string().default(''),
+  GOOGLE_PLAY_PACKAGE_NAME: z.string().default(''),
+  GOOGLE_SERVICE_ACCOUNT_JSON: z.string().default(''),
+  APPLE_ISSUER_ID: z.string().default(''),
+  APPLE_KEY_ID: z.string().default(''),
+  APPLE_PRIVATE_KEY: z.string().default(''),
+  APPLE_BUNDLE_ID: z.string().default(''),
+  APPLE_APP_ID: z.string().default(''),
+  APPLE_ENVIRONMENT: z.enum(['sandbox', 'production']).default('sandbox'),
+});
+
+const parsed = schema.safeParse(process.env);
+if (!parsed.success) throw new Error(`Invalid environment: ${parsed.error.message}`);
+module.exports = { ...parsed.data, APPLE_PRIVATE_KEY: parsed.data.APPLE_PRIVATE_KEY.replace(/\\n/g, '\n'), ALLOWED_ORIGINS: parsed.data.ALLOWED_ORIGINS.split(',').filter(Boolean), GOOGLE_CLIENT_IDS: parsed.data.GOOGLE_CLIENT_IDS.split(',').map((value) => value.trim()).filter(Boolean) };

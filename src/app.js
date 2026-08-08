@@ -1,0 +1,79 @@
+const crypto = require("crypto");
+const express = require("express");
+const cors = require("cors");
+const helmet = require("helmet");
+const rateLimit = require("express-rate-limit");
+const env = require("./config/env");
+const routes = require("./routes");
+const { errorHandler, notFoundHandler } = require("./middleware/errors");
+const app = express();
+app.disable("x-powered-by");
+app.use((req, res, next) => {
+  req.id = crypto.randomUUID();
+  res.setHeader("X-Request-Id", req.id);
+  next();
+});
+app.use(helmet({ crossOriginResourcePolicy: false }));
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (
+        !origin ||
+        env.ALLOWED_ORIGINS.length === 0 ||
+        env.ALLOWED_ORIGINS.includes(origin)
+      )
+        return callback(null, true);
+      return callback(new Error("Origin is not allowed by CORS"));
+    },
+    credentials: false,
+  }),
+);
+app.use(express.json({ limit: "1mb" }));
+app.use(
+  "/api/v1/auth/otp/request",
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: () => env.NODE_ENV === "test",
+    message: {
+      error: {
+        code: "RATE_LIMITED",
+        message: "Too many OTP attempts. Please try again later.",
+      },
+    },
+  }),
+);
+app.use(
+  "/api/v1/auth/otp/verify",
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: () => env.NODE_ENV === "test",
+    message: {
+      error: {
+        code: "RATE_LIMITED",
+        message: "Too many OTP verification attempts. Please request a new code later.",
+      },
+    },
+  }),
+);
+app.use(
+  "/api/v1/auth/admin/login",
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: () => env.NODE_ENV === "test",
+    message: { error: { code: "RATE_LIMITED", message: "Too many sign-in attempts. Please try again later." } },
+  }),
+);
+app.get("/health", (req, res) => res.json({ data: { status: "ok" } }));
+app.use("/api/v1", routes);
+app.use(notFoundHandler);
+app.use(errorHandler);
+module.exports = app;

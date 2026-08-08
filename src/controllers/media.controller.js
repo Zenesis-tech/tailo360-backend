@@ -1,0 +1,12 @@
+const { z } = require('zod');
+const { nanoid } = require('nanoid');
+const { Media } = require('../models');
+const { AppError, notFound } = require('../utils/errors');
+const env = require('../config/env');
+const r2 = require('../services/r2.service');
+const types = ['image/jpeg', 'image/png', 'image/webp', 'audio/mpeg', 'audio/mp4', 'audio/aac', 'audio/wav'];
+const input = z.object({ fileName: z.string().trim().min(1).max(180), contentType: z.enum(types), purpose: z.enum(['fabric_photo', 'sample_image', 'voice_note', 'reference_image', 'studio_logo', 'invoice_pdf', 'support_attachment']) });
+async function createUpload(req, res) { const body = input.parse(req.body); const key = `${req.auth.studio._id}/${body.purpose}/${Date.now()}-${nanoid(12)}-${body.fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`; const media = await Media.create({ studioId: req.auth.studio._id, ownerUserId: req.auth.user._id, objectKey: key, originalName: body.fileName, contentType: body.contentType, purpose: body.purpose }); const uploadUrl = await r2.createUploadUrl({ key, contentType: body.contentType }); res.status(201).json({ data: { id: media.id, uploadUrl, expiresInSeconds: 900, requiredHeaders: { 'Content-Type': body.contentType } } }); }
+async function completeUpload(req, res) { const media = await Media.findOne({ _id: req.params.id, studioId: req.auth.studio._id, status: 'pending' }); if (!media) throw notFound('Upload'); const metadata = await r2.objectMetadata(media.objectKey); const sizeBytes = Number(metadata.ContentLength || 0); const maxBytes = env.MAX_FILE_SIZE_MB * 1024 * 1024; if (metadata.ContentType !== media.contentType || sizeBytes > maxBytes) { await r2.deleteObject(media.objectKey); media.sizeBytes = sizeBytes; media.status = 'deleted'; await media.save(); if (sizeBytes > maxBytes) throw new AppError(413, 'MEDIA_TOO_LARGE', `Files must be ${env.MAX_FILE_SIZE_MB} MB or smaller.`); throw new AppError(422, 'MEDIA_TYPE_MISMATCH', 'The uploaded file type does not match the requested type.'); } media.sizeBytes = sizeBytes; media.status = 'ready'; await media.save(); res.json({ data: { id: media.id, status: media.status, contentType: media.contentType, sizeBytes: media.sizeBytes } }); }
+async function readUrl(req, res) { const media = await Media.findOne({ _id: req.params.id, studioId: req.auth.studio._id, status: 'ready' }); if (!media) throw notFound('Media'); const url = await r2.createReadUrl(media.objectKey); res.json({ data: { id: media.id, url, expiresInSeconds: 900 } }); }
+module.exports = { createUpload, completeUpload, readUrl };
