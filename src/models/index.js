@@ -168,6 +168,17 @@ const templateSchema = new Schema(
       index: true,
     },
     active: { type: Boolean, default: true },
+    garmentIconUrl: {
+      type: String,
+      trim: true,
+      maxlength: 2048,
+      default: "",
+    },
+    garmentIconMediaId: {
+      type: Schema.Types.ObjectId,
+      ref: "Media",
+      default: null,
+    },
     measurementDiagramUrl: {
       type: String,
       trim: true,

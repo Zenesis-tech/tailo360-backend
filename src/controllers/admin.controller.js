@@ -36,10 +36,17 @@ const diagramUrl = z
     "Measurement diagram must be an http(s) URL.",
   )
   .optional();
+const iconUrl = z
+  .string()
+  .trim()
+  .max(2048)
+  .refine((value) => !value || /^https?:\/\//i.test(value), "Garment icon must be an http(s) URL.")
+  .optional();
 const templateInput = z.object({
   name: z.string().trim().min(2).max(80),
   audience: z.enum(["men", "women", "kids", "unisex"]).default("unisex"),
   active: z.boolean().optional(),
+  garmentIconUrl: iconUrl,
   measurementDiagramUrl: diagramUrl,
   fields: z
     .array(
@@ -448,7 +455,8 @@ async function withDiagramUrls(rows) {
   const mediaIds = [
     ...new Set(
       values
-        .map((row) => String(row.measurementDiagramMediaId || ""))
+        .flatMap((row) => [row.garmentIconMediaId, row.measurementDiagramMediaId])
+        .map((id) => String(id || ""))
         .filter(Boolean),
     ),
   ];
@@ -465,6 +473,8 @@ async function withDiagramUrls(rows) {
   );
   return values.map((row) => ({
     ...row,
+    garmentIconUrl:
+      urls.get(String(row.garmentIconMediaId)) || row.garmentIconUrl || "",
     measurementDiagramUrl:
       urls.get(String(row.measurementDiagramMediaId)) ||
       row.measurementDiagramUrl ||
@@ -702,6 +712,57 @@ async function deleteTemplateDiagram(req, res) {
   );
   res.json({ data: (await withDiagramUrls([template]))[0] });
 }
+async function uploadTemplateIcon(req, res) {
+  const contentType = z.enum(["image/jpeg", "image/png", "image/webp"]).parse(req.get("content-type"));
+  let decodedName = req.get("x-file-name") || "garment-icon";
+  try { decodedName = decodeURIComponent(decodedName); } catch (_) { /* use the safe encoded value */ }
+  const fileName = z.string().trim().min(1).max(180).parse(decodedName);
+  if (!Buffer.isBuffer(req.body) || !req.body.length)
+    throw new AppError(422, "IMAGE_EMPTY", "Choose an image to upload.");
+  if (!imageMatchesContentType(req.body, contentType))
+    throw new AppError(422, "MEDIA_TYPE_MISMATCH", "The selected file is not a valid JPG, PNG, or WebP image.");
+  const template = await GarmentTemplate.findById(req.params.id);
+  if (!template) throw notFound("Garment template");
+  const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const ownerKey = template.scope === "global" ? "global" : String(template.studioId);
+  const key = `${ownerKey}/garment_icon/${Date.now()}-${nanoid(12)}-${safeName}`;
+  const media = await Media.create({ studioId: template.studioId, ownerUserId: req.auth.user._id, objectKey: key, originalName: fileName, contentType, sizeBytes: req.body.length, purpose: "reference_image", status: "pending" });
+  await r2.putObject({ key, body: req.body, contentType });
+  media.status = "ready";
+  await media.save();
+  const oldMediaId = template.garmentIconMediaId;
+  template.garmentIconMediaId = media._id;
+  template.garmentIconUrl = "";
+  await template.save();
+  if (oldMediaId && String(oldMediaId) !== media.id) {
+    const oldMedia = await Media.findById(oldMediaId);
+    if (oldMedia) {
+      try { await r2.deleteObject(oldMedia.objectKey); } catch (_) { /* cleanup can be retried */ }
+      oldMedia.status = "deleted";
+      await oldMedia.save();
+    }
+  }
+  await auditAdmin(req, "garment_template.icon_updated", "garment_template", template, { garmentIconMediaId: oldMediaId }, { garmentIconMediaId: media._id });
+  res.json({ data: (await withDiagramUrls([template]))[0] });
+}
+async function deleteTemplateIcon(req, res) {
+  const template = await GarmentTemplate.findById(req.params.id);
+  if (!template) throw notFound("Garment template");
+  const oldMediaId = template.garmentIconMediaId;
+  if (oldMediaId) {
+    const media = await Media.findById(oldMediaId);
+    if (media) {
+      try { await r2.deleteObject(media.objectKey); } catch (_) { /* keep deletion idempotent */ }
+      media.status = "deleted";
+      await media.save();
+    }
+  }
+  template.garmentIconMediaId = null;
+  template.garmentIconUrl = "";
+  await template.save();
+  await auditAdmin(req, "garment_template.icon_deleted", "garment_template", template, { garmentIconMediaId: oldMediaId }, { garmentIconMediaId: null });
+  res.json({ data: (await withDiagramUrls([template]))[0] });
+}
 async function prices(req, res) {
   const result = await list(Price, {}, { effectiveFrom: -1 }, req, {
     path: "templateId",
@@ -870,9 +931,11 @@ module.exports = {
   createTemplate,
   updateTemplate,
   uploadTemplateDiagram,
+  uploadTemplateIcon,
   createTemplateDiagramUpload,
   completeTemplateDiagramUpload,
   deleteTemplateDiagram,
+  deleteTemplateIcon,
   prices,
   measurements,
   members,

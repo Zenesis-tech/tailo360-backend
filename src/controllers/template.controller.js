@@ -12,10 +12,17 @@ const diagramUrl = z
     "Measurement diagram must be an http(s) URL.",
   )
   .optional();
+const iconUrl = z
+  .string()
+  .trim()
+  .max(2048)
+  .refine((value) => !value || /^https?:\/\//i.test(value), "Garment icon must be an http(s) URL.")
+  .optional();
 const input = z.object({
   name: z.string().trim().min(2).max(80),
   audience: z.enum(["men", "women", "kids", "unisex"]).default("unisex"),
   active: z.boolean().optional(),
+  garmentIconUrl: iconUrl,
   measurementDiagramUrl: diagramUrl,
   fields: z
     .array(
@@ -73,7 +80,8 @@ async function withDiagramUrls(rows) {
   const ids = [
     ...new Set(
       values
-        .map((row) => String(row.measurementDiagramMediaId || ""))
+        .flatMap((row) => [row.garmentIconMediaId, row.measurementDiagramMediaId])
+        .map((id) => String(id || ""))
         .filter(Boolean),
     ),
   ];
@@ -87,6 +95,8 @@ async function withDiagramUrls(rows) {
   );
   return values.map((row) => ({
     ...row,
+    garmentIconUrl:
+      urls.get(String(row.garmentIconMediaId)) || row.garmentIconUrl || "",
     measurementDiagramUrl:
       urls.get(String(row.measurementDiagramMediaId)) ||
       row.measurementDiagramUrl ||
@@ -120,10 +130,31 @@ async function list(req, res) {
     ...(req.query.active === "true" ? { active: true } : {}),
   }).sort({ scope: 1, audience: 1, name: 1 });
   const byName = new Map();
+  const globalByName = new Map();
   for (const row of rows) {
     const key = `${row.audience || "unisex"}:${row.name.toLowerCase()}`;
+    if (row.scope === "global") globalByName.set(key, row);
     const current = byName.get(key);
-    if (!current || row.scope !== "global") byName.set(key, row);
+    if (!current || row.scope !== "global") {
+      // Studio templates override global template details, but retain the
+      // platform-managed icon until the studio supplies its own image.
+      if (
+        row.scope !== "global" &&
+        !row.garmentIconMediaId &&
+        !row.garmentIconUrl
+      ) {
+        const global = globalByName.get(key);
+        if (global) {
+          byName.set(key, {
+            ...row.toObject(),
+            garmentIconMediaId: global.garmentIconMediaId,
+            garmentIconUrl: global.garmentIconUrl,
+          });
+          continue;
+        }
+      }
+      byName.set(key, row);
+    }
   }
   res.json({ data: await withDiagramUrls([...byName.values()]) });
 }
@@ -171,6 +202,8 @@ async function clone(req, res) {
     _id: undefined,
     studioId: req.auth.studio._id,
     scope: "studio",
+    garmentIconMediaId: source.garmentIconMediaId || null,
+    garmentIconUrl: source.garmentIconUrl || "",
     measurementDiagramMediaId: null,
     measurementDiagramUrl: source.measurementDiagramUrl || "",
     name: req.body.name || `${source.name} copy`,

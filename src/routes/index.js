@@ -205,6 +205,7 @@ router.post("/media/upload-url", authenticate, media.createUpload);
 router.post("/media/:id/complete", authenticate, media.completeUpload);
 router.get("/media/:id/url", authenticate, media.readUrl);
 router.get("/subscription", authenticate, subscriptions.get);
+router.get("/subscription/usage", authenticate, subscriptions.usage);
 router.get("/subscription/plans", authenticate, subscriptions.plans);
 router.get("/subscription/products", authenticate, subscriptions.products);
 router.post(
@@ -272,6 +273,17 @@ router.put(
 router.post("/admin/garment-templates/:id/diagram/upload-url", authenticate, requirePlatformAdmin, admin.createTemplateDiagramUpload);
 router.post("/admin/garment-templates/:id/diagram/:mediaId/complete", authenticate, requirePlatformAdmin, admin.completeTemplateDiagramUpload);
 router.delete("/admin/garment-templates/:id/diagram", authenticate, requirePlatformAdmin, admin.deleteTemplateDiagram);
+router.put(
+  "/admin/garment-templates/:id/icon",
+  authenticate,
+  requirePlatformAdmin,
+  express.raw({
+    type: ["image/jpeg", "image/png", "image/webp"],
+    limit: `${env.MAX_FILE_SIZE_MB}mb`,
+  }),
+  admin.uploadTemplateIcon,
+);
+router.delete("/admin/garment-templates/:id/icon", authenticate, requirePlatformAdmin, admin.deleteTemplateIcon);
 router.get("/admin/prices", authenticate, requirePlatformAdmin, admin.prices);
 router.get("/admin/measurements", authenticate, requirePlatformAdmin, admin.measurements);
 router.get("/admin/members", authenticate, requirePlatformAdmin, admin.members);

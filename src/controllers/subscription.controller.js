@@ -1,10 +1,23 @@
 const { z } = require('zod');
-const { Subscription, SubscriptionPlan, SubscriptionEvent } = require('../models');
+const { Subscription, SubscriptionPlan, SubscriptionEvent, Customer, Order, Member } = require('../models');
 const { AppError } = require('../utils/errors');
 const { verifyPurchase, planFor } = require('../services/store-verification.service');
 const { rewardReferralForStudio, expireReferrals } = require('../services/subscription-lifecycle.service');
 const { auditAdmin } = require('../services/audit.service');
 function get(req, res) { res.json({ data: req.auth.subscription }); }
+async function usage(req, res) {
+  const studioId = req.auth.studio._id;
+  const monthStart = new Date();
+  monthStart.setDate(1);
+  monthStart.setHours(0, 0, 0, 0);
+  const [customers, orders, staff, plan] = await Promise.all([
+    Customer.countDocuments({ studioId, deletedAt: null }),
+    Order.countDocuments({ studioId, deletedAt: null, createdAt: { $gte: monthStart } }),
+    Member.countDocuments({ studioId, status: { $in: ['active', 'limited'] } }),
+    SubscriptionPlan.findOne({ code: req.auth.subscription.plan }).select('limits'),
+  ]);
+  res.json({ data: { customers, orders, staff, limits: plan?.limits || { customers: -1, ordersPerMonth: -1, staffSeats: req.auth.subscription.seatLimit || 1 } } });
+}
 async function plans(req, res) { const rows = await SubscriptionPlan.find({ active: true }).select('code name description monthlyPricePaise yearlyPricePaise limits features storeProducts').sort({ monthlyPricePaise: 1 }); res.json({ data: rows }); }
 async function products(req, res) { const plans = await SubscriptionPlan.find({ active: true }).sort({ monthlyPricePaise: 1 }); const platform = req.query.platform; const data = plans.flatMap((plan) => plan.storeProducts.filter((product) => product.active && (!platform || product.platform === platform)).map((product) => ({ id: product.productId, platform: product.platform, period: product.period, plan: plan.code, name: plan.name, pricePaise: product.period === 'yearly' ? plan.yearlyPricePaise : plan.monthlyPricePaise }))); res.json({ data }); }
 async function validatePurchase(req, res) {
@@ -21,4 +34,4 @@ const planInput = z.object({ code: z.enum(['starter', 'pro', 'studio']), name: z
 async function adminListPlans(req, res) { res.json({ data: await SubscriptionPlan.find().sort({ monthlyPricePaise: 1 }) }); }
 async function adminCreatePlan(req, res) { const plan = await SubscriptionPlan.create(planInput.parse(req.body)); await auditAdmin(req, 'subscription_plan.created', 'subscription_plan', plan, undefined, plan); res.status(201).json({ data: plan }); }
 async function adminUpdatePlan(req, res) { const before = await SubscriptionPlan.findById(req.params.id); const plan = await SubscriptionPlan.findByIdAndUpdate(req.params.id, planInput.partial().parse(req.body), { new: true, runValidators: true }); if (!plan) throw new AppError(404, 'NOT_FOUND', 'Subscription plan was not found.'); await auditAdmin(req, 'subscription_plan.updated', 'subscription_plan', plan, before, plan); res.json({ data: plan }); }
-module.exports = { get, plans, products, validatePurchase, adminListPlans, adminCreatePlan, adminUpdatePlan };
+module.exports = { get, usage, plans, products, validatePurchase, adminListPlans, adminCreatePlan, adminUpdatePlan };
