@@ -185,6 +185,71 @@ test('garment templates persist a backend-managed measurement diagram', async ()
   ).toBe(diagram);
 });
 
+test('order creation persists per-garment measurements', async () => {
+  const { Customer, SubscriptionPlan } = require('../src/models');
+  await SubscriptionPlan.findOneAndUpdate(
+    { code: 'starter' },
+    {
+      code: 'starter',
+      name: 'Starter',
+      active: true,
+      trialDays: 14,
+      monthlyPricePaise: 29900,
+      yearlyPricePaise: 299000,
+      limits: { customers: 80, ordersPerMonth: 150, staffSeats: 1 },
+      features: [],
+    },
+    { upsert: true, new: true },
+  );
+  const verified = await createAccount('+919876543220', { garmentAudiences: ['women'] });
+  const token = verified.body.data.accessToken;
+  const templates = await request(app)
+    .get('/api/v1/garment-templates?active=true')
+    .set('Authorization', `Bearer ${token}`)
+    .expect(200);
+  const kurti = templates.body.data.find((template) => template.name === 'Kurti');
+  await request(app)
+    .put(`/api/v1/pricing/${kurti._id}`)
+    .set('Authorization', `Bearer ${token}`)
+    .send({ amountPaise: 180000 })
+    .expect(200);
+  const customer = await Customer.create({
+    studioId: verified.body.data.studioId,
+    name: 'Measurement Client',
+    phone: '+919000000220',
+  });
+  const created = await request(app)
+    .post('/api/v1/orders')
+    .set('Authorization', `Bearer ${token}`)
+    .send({
+      customerId: customer.id,
+      deliveryDate: new Date(Date.now() + 86400000).toISOString(),
+      lines: [{
+        templateId: kurti._id,
+        quantity: 1,
+        measurements: { Chest: '40', Length: '44', Waist: '36' },
+        customizations: {},
+        measurementSource: 'fresh',
+      }],
+    })
+    .expect(201);
+
+  const { Order } = require('../src/models');
+  const stored = await Order.findById(created.body.data._id);
+  expect(stored.lines[0].measurements.get('Chest')).toBe('40');
+  expect(stored.lines[0].measurements.get('Length')).toBe('44');
+
+  const detail = await request(app)
+    .get(`/api/v1/orders/${created.body.data._id}`)
+    .set('Authorization', `Bearer ${token}`)
+    .expect(200);
+  expect(detail.body.data.lines[0].measurements).toEqual({
+    Chest: '40',
+    Length: '44',
+    Waist: '36',
+  });
+});
+
 test('subscription products are filtered for the requesting store', async () => {
   const verified = await createAccount('+919876543214');
   const { SubscriptionPlan } = require('../src/models');

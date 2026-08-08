@@ -31,7 +31,10 @@ const orderInput = z.object({
     .optional(),
 });
 function serialize(order) {
-  const object = order.toObject ? order.toObject() : order;
+  // Flatten nested Mongoose Maps before JSON serialization. Without this,
+  // persisted measurements are emitted as `{}` because JSON.stringify does
+  // not enumerate native Map entries.
+  const object = order.toObject ? order.toObject({ flattenMaps: true }) : order;
   const paidPaise = object.payments.reduce(
     (sum, p) =>
       sum + (p.direction === "collection" ? p.amountPaise : -p.amountPaise),
@@ -99,6 +102,11 @@ async function create(req, res) {
       template = templateMap.get(line.templateId);
     return {
       ...line,
+      // Nested Mongoose Map fields inside an embedded document can be cast to
+      // an empty map when assigned from a spread plain object. Constructing
+      // real Maps preserves every validated measurement/customization key.
+      measurements: new Map(Object.entries(line.measurements)),
+      customizations: new Map(Object.entries(line.customizations)),
       name: template.name,
       unitPricePaise: price.amountPaise,
       lineTotalPaise: price.amountPaise * line.quantity,

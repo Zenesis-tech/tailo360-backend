@@ -21,7 +21,12 @@ async function verifyOtp(req, res) {
 async function google(req, res) {
   if (!env.GOOGLE_CLIENT_IDS.length) throw new AppError(503, 'GOOGLE_AUTH_NOT_CONFIGURED', 'Google sign-in is not configured.');
   const idToken = z.object({ idToken: z.string().min(20), studioName: z.string().trim().min(2).max(80).optional(), garmentAudiences: z.array(z.enum(['men', 'women', 'kids', 'unisex'])).min(1).max(4).optional() }).parse(req.body);
-  const ticket = await new OAuth2Client().verifyIdToken({ idToken: idToken.idToken, audience: env.GOOGLE_CLIENT_IDS });
+  let ticket;
+  try {
+    ticket = await new OAuth2Client().verifyIdToken({ idToken: idToken.idToken, audience: env.GOOGLE_CLIENT_IDS });
+  } catch (_) {
+    throw new AppError(401, 'GOOGLE_TOKEN_INVALID', 'Google sign-in could not be verified. Please try again.');
+  }
   const profile = ticket.getPayload();
   if (!profile?.sub || !profile.email_verified || !profile.email) throw new AppError(401, 'GOOGLE_TOKEN_INVALID', 'Google did not provide a verified identity.');
   let user = await User.findOne({ googleSubject: profile.sub }); let isNew = false; let member;

@@ -6,6 +6,7 @@ const rateLimit = require("express-rate-limit");
 const env = require("./config/env");
 const routes = require("./routes");
 const { errorHandler, notFoundHandler } = require("./middleware/errors");
+const realtimeEvents = require('./services/realtime-events.service');
 const app = express();
 app.disable("x-powered-by");
 app.use((req, res, next) => {
@@ -73,7 +74,22 @@ app.use(
   }),
 );
 app.get("/health", (req, res) => res.json({ data: { status: "ok" } }));
-app.use("/api/v1", routes);
+app.use('/api/v1', (req, res, next) => {
+  res.on('finish', () => {
+    if (
+      req.auth?.studio?._id &&
+      !['GET', 'HEAD', 'OPTIONS'].includes(req.method) &&
+      res.statusCode >= 200 &&
+      res.statusCode < 300
+    ) {
+      realtimeEvents.publish(req.auth.studio._id, {
+        method: req.method,
+        resource: req.path.split('/').filter(Boolean)[0] || 'data',
+      });
+    }
+  });
+  next();
+}, routes);
 app.use(notFoundHandler);
 app.use(errorHandler);
 module.exports = app;
