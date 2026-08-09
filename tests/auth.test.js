@@ -57,6 +57,37 @@ test('OTP provisions a studio and returns a usable token', async () => {
     .expect(200);
 });
 
+test('readiness reports the connected database state', async () => {
+  const response = await request(app).get('/ready').expect(200);
+  expect(response.body.data).toMatchObject({
+    status: 'ready',
+    database: { ready: true, state: 'connected' },
+  });
+});
+
+test('database connection failures use a retryable service response', () => {
+  const { errorHandler } = require('../src/middleware/errors');
+  const error = new Error('Operation `users.findOne()` buffering timed out after 10000ms');
+  error.name = 'MongooseError';
+  const response = {
+    status: jest.fn().mockReturnThis(),
+    json: jest.fn().mockReturnThis(),
+  };
+  const log = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+  errorHandler(error, { id: 'database-test-request' }, response, () => {});
+
+  expect(response.status).toHaveBeenCalledWith(503);
+  expect(response.json).toHaveBeenCalledWith({
+    error: {
+      code: 'DATABASE_UNAVAILABLE',
+      message: 'The database is temporarily unavailable. Please try again.',
+      requestId: 'database-test-request',
+    },
+  });
+  log.mockRestore();
+});
+
 test('dashboard returns backend-derived empty metrics for a new studio', async () => {
   const verified = await createAccount('+919876543219');
   const response = await request(app)

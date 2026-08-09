@@ -8,6 +8,7 @@ const routes = require("./routes");
 const { errorHandler, notFoundHandler } = require("./middleware/errors");
 const realtimeEvents = require('./services/realtime-events.service');
 const { AppError } = require('./utils/errors');
+const { databaseStatus } = require('./config/db');
 const app = express();
 // Hostinger terminates HTTPS in front of Node and forwards the client address.
 // Trust the nearest proxy so rate limiting keys requests by the real client IP.
@@ -79,7 +80,24 @@ app.use(
     message: { error: { code: "RATE_LIMITED", message: "Too many sign-in attempts. Please try again later." } },
   }),
 );
-app.get("/health", (req, res) => res.json({ data: { status: "ok" } }));
+app.get("/health", (req, res) => {
+  const database = databaseStatus();
+  res.json({ data: { status: "ok", database } });
+});
+app.get("/ready", (req, res) => {
+  const database = databaseStatus();
+  if (!database.ready) {
+    return res.status(503).json({
+      error: {
+        code: "DATABASE_UNAVAILABLE",
+        message: "The database connection is not ready.",
+        requestId: req.id,
+      },
+      data: { database },
+    });
+  }
+  return res.json({ data: { status: "ready", database } });
+});
 app.use('/api/v1', (req, res, next) => {
   res.on('finish', () => {
     if (
