@@ -15,6 +15,7 @@ const connectionStates = [
 ];
 
 let listenersInstalled = false;
+let connectionPromise;
 function installConnectionLogging() {
   if (listenersInstalled) return;
   listenersInstalled = true;
@@ -33,8 +34,10 @@ function installConnectionLogging() {
 }
 
 async function connectDatabase() {
+  if (mongoose.connection.readyState === 1) return mongoose.connection;
+  if (connectionPromise) return connectionPromise;
   installConnectionLogging();
-  await mongoose.connect(env.MONGODB_URI, {
+  connectionPromise = mongoose.connect(env.MONGODB_URI, {
     autoIndex: env.NODE_ENV !== 'production',
     serverSelectionTimeoutMS: 10000,
     connectTimeoutMS: 10000,
@@ -47,6 +50,11 @@ async function connectDatabase() {
     // Avoid connection stalls on hosts that advertise IPv6 without routing it.
     family: 4,
   });
+  try {
+    return await connectionPromise;
+  } finally {
+    connectionPromise = undefined;
+  }
 }
 
 function databaseStatus() {
