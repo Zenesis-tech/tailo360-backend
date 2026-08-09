@@ -8,15 +8,13 @@ const routes = require("./routes");
 const { errorHandler, notFoundHandler } = require("./middleware/errors");
 const realtimeEvents = require('./services/realtime-events.service');
 const { AppError } = require('./utils/errors');
+const { safeError } = require('./utils/logging');
 const { connectDatabase, databaseStatus } = require('./config/db');
 const app = express();
 // Some managed hosts import the Express app instead of executing server.js.
 // Start the shared connection in both modes; connectDatabase is idempotent.
 connectDatabase().catch((error) => {
-  console.error("Initial MongoDB connection failed", {
-    name: error?.name,
-    message: error?.message,
-  });
+  console.error("Initial MongoDB connection failed", safeError(error));
 });
 // Hostinger terminates HTTPS in front of Node and forwards the client address.
 // Trust the nearest proxy so rate limiting keys requests by the real client IP.

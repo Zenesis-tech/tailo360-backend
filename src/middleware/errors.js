@@ -1,5 +1,6 @@
 const { ZodError } = require('zod');
 const { AppError } = require('../utils/errors');
+const { safeError } = require('../utils/logging');
 const databaseErrorNames = new Set([
   'MongoNetworkError',
   'MongoServerSelectionError',
@@ -10,10 +11,7 @@ const databaseErrorMessage = /buffering timed out|before initial connection|clie
 function logError(error, requestId) {
   console.error({
     requestId,
-    name: error?.name,
-    message: error?.message,
-    stack: error?.stack,
-    cause: error?.cause,
+    ...safeError(error),
   });
 }
 

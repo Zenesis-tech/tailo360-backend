@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const env = require('./env');
+const { safeError } = require('../utils/logging');
 
 mongoose.set('strictQuery', true);
 // Never leave API requests waiting in Mongoose's in-memory buffer when Atlas
@@ -26,10 +27,7 @@ function installConnectionLogging() {
     console.error('MongoDB connection lost; the driver will keep retrying');
   });
   mongoose.connection.on('error', (error) => {
-    console.error('MongoDB connection error', {
-      name: error?.name,
-      message: error?.message,
-    });
+    console.error('MongoDB connection error', safeError(error));
   });
 }
 
