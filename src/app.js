@@ -7,7 +7,11 @@ const env = require("./config/env");
 const routes = require("./routes");
 const { errorHandler, notFoundHandler } = require("./middleware/errors");
 const realtimeEvents = require('./services/realtime-events.service');
+const { AppError } = require('./utils/errors');
 const app = express();
+// Hostinger terminates HTTPS in front of Node and forwards the client address.
+// Trust the nearest proxy so rate limiting keys requests by the real client IP.
+app.set("trust proxy", 1);
 app.disable("x-powered-by");
 app.use((req, res, next) => {
   req.id = crypto.randomUUID();
@@ -24,7 +28,9 @@ app.use(
         env.ALLOWED_ORIGINS.includes(origin)
       )
         return callback(null, true);
-      return callback(new Error("Origin is not allowed by CORS"));
+      return callback(
+        new AppError(403, "CORS_NOT_ALLOWED", "Origin is not allowed by CORS."),
+      );
     },
     credentials: false,
   }),

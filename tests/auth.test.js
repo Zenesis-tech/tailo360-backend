@@ -90,6 +90,16 @@ test('async validation failures use the standard API error response', async () =
   expect(response.body.error.requestId).toBeTruthy();
 });
 
+test('malformed JSON returns a client error instead of an internal error', async () => {
+  const response = await request(app)
+    .post('/api/v1/auth/otp/request')
+    .set('Content-Type', 'application/json')
+    .send('{phone:}')
+    .expect(400);
+  expect(response.body.error.code).toBe('INVALID_JSON');
+  expect(response.body.error.requestId).toBeTruthy();
+});
+
 test('refresh tokens rotate and cannot be replayed', async () => {
   const verified = await createAccount('+919876543211');
   const original = verified.body.data.refreshToken;
