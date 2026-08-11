@@ -277,6 +277,7 @@ router.get("/admin/customers", authenticate, requirePlatformAdmin, admin.custome
 router.get("/admin/garment-templates", authenticate, requirePlatformAdmin, admin.templates);
 router.post("/admin/garment-templates", authenticate, requirePlatformAdmin, admin.createTemplate);
 router.patch("/admin/garment-templates/:id", authenticate, requirePlatformAdmin, admin.updateTemplate);
+router.delete("/admin/garment-templates/:id", authenticate, requirePlatformAdmin, admin.deleteTemplate);
 router.put(
   "/admin/garment-templates/:id/diagram",
   authenticate,

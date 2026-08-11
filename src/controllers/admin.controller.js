@@ -539,6 +539,64 @@ async function updateTemplate(req, res) {
   res.json({ data: (await withDiagramUrls([row]))[0] });
 }
 
+async function deleteTemplate(req, res) {
+  const body = z
+    .object({ version: z.number().int().nonnegative() })
+    .parse(req.body);
+  const row = await GarmentTemplate.findById(req.params.id);
+  if (!row) throw notFound("Garment template");
+  if (row.version !== body.version) {
+    throw new AppError(
+      409,
+      "EDIT_CONFLICT",
+      "This template changed elsewhere. Refresh and try again.",
+    );
+  }
+
+  const [orders, measurements, prices] = await Promise.all([
+    Order.countDocuments({ "lines.templateId": row._id }),
+    Measurement.countDocuments({ templateId: row._id }),
+    Price.countDocuments({ templateId: row._id }),
+  ]);
+  if (orders || measurements || prices) {
+    throw new AppError(
+      409,
+      "GARMENT_TEMPLATE_IN_USE",
+      `This garment cannot be deleted because it is used by ${orders} order(s), ${measurements} measurement profile(s), and ${prices} price record(s). Mark it inactive instead.`,
+      { orders, measurements, prices },
+    );
+  }
+
+  const before = row.toObject();
+  const mediaIds = [row.garmentIconMediaId, row.measurementDiagramMediaId].filter(
+    Boolean,
+  );
+  const mediaRows = mediaIds.length
+    ? await Media.find({ _id: { $in: mediaIds } })
+    : [];
+  await auditAdmin(
+    req,
+    "garment_template.deleted",
+    "garment_template",
+    row,
+    before,
+    { deleted: true },
+  );
+  await row.deleteOne();
+  await Promise.all(
+    mediaRows.map(async (media) => {
+      try {
+        await r2.deleteObject(media.objectKey);
+      } catch (_) {
+        /* keep template deletion successful; media cleanup can be retried */
+      }
+      media.status = "deleted";
+      await media.save();
+    }),
+  );
+  res.json({ data: { id: String(row._id), name: row.name, deleted: true } });
+}
+
 const diagramUploadInput = z.object({
   fileName: z.string().trim().min(1).max(180),
   contentType: z.enum(["image/jpeg", "image/png", "image/webp"]),
@@ -930,6 +988,7 @@ module.exports = {
   templates,
   createTemplate,
   updateTemplate,
+  deleteTemplate,
   uploadTemplateDiagram,
   uploadTemplateIcon,
   createTemplateDiagramUpload,

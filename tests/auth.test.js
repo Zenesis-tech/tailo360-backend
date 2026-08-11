@@ -189,9 +189,19 @@ test('onboarding provisions only the selected garment audiences', async () => {
     .get('/api/v1/garment-templates')
     .set('Authorization', `Bearer ${verified.body.data.accessToken}`)
     .expect(200);
-  expect(templates.body.data).toHaveLength(4);
+  expect(templates.body.data).toHaveLength(13);
   expect(templates.body.data.every((template) => template.audience === 'women')).toBe(true);
-  expect(templates.body.data.map((template) => template.name)).toEqual(expect.arrayContaining(['Blouse', 'Kurti', 'Salwar suit', 'Lehenga']));
+  expect(templates.body.data.map((template) => template.name)).toEqual(
+    expect.arrayContaining([
+      'Blouse',
+      'Kurti',
+      'Salwar suit',
+      'Lehenga',
+      'Anarkali',
+      'Petticoat',
+      'Women’s trousers',
+    ]),
+  );
 });
 
 test('settings audience toggles immediately filter order garments', async () => {
@@ -210,12 +220,19 @@ test('settings audience toggles immediately filter order garments', async () => 
     .get('/api/v1/garment-templates?active=true')
     .set('Authorization', `Bearer ${token}`)
     .expect(200);
-  expect(templates.body.data).toHaveLength(3);
+  expect(templates.body.data).toHaveLength(7);
   expect(
     templates.body.data.every((template) => template.audience === 'kids'),
   ).toBe(true);
   expect(templates.body.data.map((template) => template.name)).toEqual(
-    expect.arrayContaining(['Kids shirt', 'Kids trousers', 'Kids dress']),
+    expect.arrayContaining([
+      'Kids shirt',
+      'Kids trousers',
+      'Kids dress',
+      'Kids frock',
+      'Kids kurta pyjama',
+      'School uniform',
+    ]),
   );
 });
 
@@ -516,4 +533,53 @@ test('platform admin can upload, preview, replace, and delete a garment diagram'
   expect(deletedMedia.status).toBe('deleted');
   expect(updatedTemplate.measurementDiagramMediaId).toBeNull();
   expect(updatedTemplate.measurementDiagramUrl).toBe('');
+});
+
+test('platform admin can delete unused garments but referenced garments are protected', async () => {
+  const verified = await createAccount('+919876543217');
+  const { User, GarmentTemplate, Price } = require('../src/models');
+  await User.updateOne(
+    { _id: verified.body.data.user.id },
+    { platformRole: 'admin' },
+  );
+
+  const unused = await GarmentTemplate.create({
+    studioId: null,
+    scope: 'global',
+    name: 'Temporary unused garment',
+    audience: 'unisex',
+    fields: [],
+  });
+  const deleted = await request(app)
+    .delete(`/api/v1/admin/garment-templates/${unused.id}`)
+    .set('Authorization', `Bearer ${verified.body.data.accessToken}`)
+    .send({ version: unused.version })
+    .expect(200);
+  expect(deleted.body.data).toMatchObject({
+    id: unused.id,
+    name: 'Temporary unused garment',
+    deleted: true,
+  });
+  expect(await GarmentTemplate.findById(unused.id)).toBeNull();
+
+  const used = await GarmentTemplate.create({
+    studioId: null,
+    scope: 'global',
+    name: 'Temporary referenced garment',
+    audience: 'unisex',
+    fields: [],
+  });
+  await Price.create({
+    studioId: verified.body.data.studioId,
+    templateId: used._id,
+    amountPaise: 10000,
+  });
+  const blocked = await request(app)
+    .delete(`/api/v1/admin/garment-templates/${used.id}`)
+    .set('Authorization', `Bearer ${verified.body.data.accessToken}`)
+    .send({ version: used.version })
+    .expect(409);
+  expect(blocked.body.error.code).toBe('GARMENT_TEMPLATE_IN_USE');
+  expect(blocked.body.error.details.prices).toBe(1);
+  expect(await GarmentTemplate.findById(used.id)).not.toBeNull();
 });

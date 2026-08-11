@@ -1,5 +1,6 @@
 const { connectDatabase } = require('../config/db');
 const { SubscriptionPlan } = require('../models');
+const mongoose = require('mongoose');
 
 const plans = [
   { code: 'starter', name: 'Starter', description: 'Simple order and customer tracking.', trialDays: 14, monthlyPricePaise: 29900, yearlyPricePaise: 299000, limits: { customers: 80, ordersPerMonth: 150, staffSeats: 1 }, features: ['Basic measurement profiles', 'Delivery reminders'], storeProducts: [] },
@@ -7,4 +8,21 @@ const plans = [
   { code: 'studio', name: 'Studio', description: 'For teams and advanced reporting.', trialDays: 14, monthlyPricePaise: 129900, yearlyPricePaise: 1299000, limits: { customers: -1, ordersPerMonth: -1, staffSeats: 3 }, features: ['Role-based staff access', 'Priority support', 'Report exports'], storeProducts: [] },
 ];
 
-connectDatabase().then(async () => { for (const plan of plans) await SubscriptionPlan.updateOne({ code: plan.code }, { $setOnInsert: plan }, { upsert: true }); console.log('Subscription plans seeded. Add real Google/Apple product IDs via platform-admin API.'); process.exit(0); }).catch((error) => { console.error(error); process.exit(1); });
+async function run() {
+  await connectDatabase();
+  for (const plan of plans) {
+    await SubscriptionPlan.updateOne(
+      { code: plan.code },
+      { $setOnInsert: plan },
+      { upsert: true },
+    );
+  }
+  console.log('Subscription plans seeded. Add real Google/Apple product IDs via platform-admin API.');
+  await mongoose.disconnect();
+}
+
+run().catch(async (error) => {
+  console.error(error);
+  await mongoose.disconnect();
+  process.exit(1);
+});
