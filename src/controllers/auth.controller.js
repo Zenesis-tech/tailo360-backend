@@ -3,7 +3,7 @@ const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
 const { z } = require('zod');
 const env = require('../config/env');
-const { Otp, User, Member, Session } = require('../models');
+const { Otp, User, Member, Session, Studio } = require('../models');
 const { AppError } = require('../utils/errors');
 const { hash, createStudioFor, issueSession } = require('../services/auth.service');
 const otpProvider = require('../services/otp-provider.service');
@@ -14,9 +14,10 @@ async function requestOtp(req, res) { const phone = phoneSchema.parse(req.body.p
 async function verifyOtp(req, res) {
   const body = z.object({ phone: phoneSchema, code: z.string().regex(/^\d{6}$/), studioName: z.string().trim().min(2).max(80).optional(), referralCode: z.string().trim().toUpperCase().max(10).optional(), garmentAudiences: z.array(z.enum(['men', 'women', 'kids', 'unisex'])).min(1).max(4).optional() }).parse(req.body);
   if (useOtpProvider()) { if (!await otpProvider.verifyOtp(body.phone, body.code)) throw new AppError(401, 'OTP_INVALID', 'The code is invalid or expired.'); } else { const otp = await Otp.findOne({ phone: body.phone }).sort({ createdAt: -1 }); if (!otp || otp.expiresAt < new Date() || otp.codeHash !== hash(body.code)) throw new AppError(401, 'OTP_INVALID', 'The code is invalid or expired.'); await Otp.deleteMany({ phone: body.phone }); }
-  let user = await User.findOne({ phone: body.phone }); let isNew = false; let member;
-  if (!user) { user = await User.create({ phone: body.phone }); ({ owner: member } = await createStudioFor(user, body)); isNew = true; } else { member = await Member.findOne({ userId: user._id, status: { $in: ['active', 'limited'] } }); if (!member) throw new AppError(403, 'NO_ACTIVE_STUDIO', 'This account has no active studio membership.'); }
-  const tokens = await issueSession(user, member); res.json({ data: { ...tokens, isNew, user: { id: user.id, phone: user.phone, name: user.name }, studioId: member.studioId, role: member.role } });
+  let user = await User.findOne({ phone: body.phone }); let isNew = false; let member; let studio;
+  if (!user) { user = await User.create({ phone: body.phone }); ({ studio, owner: member } = await createStudioFor(user, body)); isNew = true; } else { member = await Member.findOne({ userId: user._id, status: { $in: ['active', 'limited'] } }); if (!member) throw new AppError(403, 'NO_ACTIVE_STUDIO', 'This account has no active studio membership.'); studio = await Studio.findById(member.studioId); }
+  const needsOnboarding = isNew || (!studio.onboardingCompletedAt && studio.name === 'My Studio');
+  const tokens = await issueSession(user, member); res.json({ data: { ...tokens, isNew, needsOnboarding, user: { id: user.id, phone: user.phone, name: user.name }, studioId: member.studioId, role: member.role } });
 }
 async function google(req, res) {
   if (!env.GOOGLE_CLIENT_IDS.length) throw new AppError(503, 'GOOGLE_AUTH_NOT_CONFIGURED', 'Google sign-in is not configured.');
@@ -29,9 +30,10 @@ async function google(req, res) {
   }
   const profile = ticket.getPayload();
   if (!profile?.sub || !profile.email_verified || !profile.email) throw new AppError(401, 'GOOGLE_TOKEN_INVALID', 'Google did not provide a verified identity.');
-  let user = await User.findOne({ googleSubject: profile.sub }); let isNew = false; let member;
-  if (!user) { user = await User.create({ googleSubject: profile.sub, email: profile.email.toLowerCase(), name: profile.name || profile.email }); ({ owner: member } = await createStudioFor(user, { studioName: idToken.studioName })); isNew = true; } else { member = await Member.findOne({ userId: user._id, status: { $in: ['active', 'limited'] } }); if (!member) throw new AppError(403, 'NO_ACTIVE_STUDIO', 'This account has no active studio membership.'); }
-  const tokens = await issueSession(user, member); res.json({ data: { ...tokens, isNew, user: { id: user.id, email: user.email, name: user.name }, studioId: member.studioId, role: member.role } });
+  let user = await User.findOne({ googleSubject: profile.sub }); let isNew = false; let member; let studio;
+  if (!user) { user = await User.create({ googleSubject: profile.sub, email: profile.email.toLowerCase(), name: profile.name || profile.email }); ({ studio, owner: member } = await createStudioFor(user, { studioName: idToken.studioName })); isNew = true; } else { member = await Member.findOne({ userId: user._id, status: { $in: ['active', 'limited'] } }); if (!member) throw new AppError(403, 'NO_ACTIVE_STUDIO', 'This account has no active studio membership.'); studio = await Studio.findById(member.studioId); }
+  const needsOnboarding = isNew || (!studio.onboardingCompletedAt && studio.name === 'My Studio');
+  const tokens = await issueSession(user, member); res.json({ data: { ...tokens, isNew, needsOnboarding, user: { id: user.id, email: user.email, name: user.name }, studioId: member.studioId, role: member.role } });
 }
 async function adminLogin(req, res) { const input = z.object({ email: z.string().trim().email().max(254), password: z.string().min(10).max(200) }).parse(req.body); const user = await User.findOne({ email: input.email.toLowerCase(), deletedAt: null }).select('+passwordHash'); if (!user || user.platformRole !== 'admin' || !verifyPassword(input.password, user.passwordHash)) throw new AppError(401, 'INVALID_ADMIN_CREDENTIALS', 'Email or password is incorrect.'); const member = await Member.findOne({ userId: user._id, status: { $in: ['active', 'limited'] } }); if (!member) throw new AppError(403, 'NO_ACTIVE_STUDIO', 'This account has no active studio membership.'); const tokens = await issueSession(user, member); res.json({ data: { ...tokens, user: { id: user.id, email: user.email, name: user.name, platformRole: user.platformRole } } }); }
 async function refresh(req, res) {

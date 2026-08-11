@@ -1,8 +1,45 @@
-const { z } = require('zod'); const { Order, Studio, Member, Referral, ReferralRewardConfig, Customer, Notification } = require('../models'); const { AppError, notFound } = require('../utils/errors'); const { serialize } = require('./order.controller'); const { activeReferralConfig, expireReferrals } = require('../services/subscription-lifecycle.service'); const { provisionStarterGarments } = require('../services/garment-catalog.service');
+const { z } = require('zod'); const { Order, Studio, Member, Referral, ReferralRewardConfig, Customer, Notification, User, Media } = require('../models'); const { AppError, notFound } = require('../utils/errors'); const { serialize } = require('./order.controller'); const { activeReferralConfig, expireReferrals } = require('../services/subscription-lifecycle.service'); const { provisionStarterGarments } = require('../services/garment-catalog.service');
 async function recordPayment(req, res) { const body = z.object({ orderId: z.string(), amountPaise: z.number().int().positive(), direction: z.enum(['collection', 'refund']).default('collection'), method: z.enum(['cash', 'upi', 'card', 'bank']), note: z.string().max(500).optional() }).parse(req.body); const order = await Order.findOne({ _id: body.orderId, studioId: req.auth.studio._id, deletedAt: null }); if (!order) throw notFound('Order'); if (body.direction === 'refund' && req.auth.member.role !== 'owner') throw new AppError(403, 'FORBIDDEN', 'Only an owner can record a refund.'); const paid = order.payments.reduce((sum, p) => sum + (p.direction === 'collection' ? p.amountPaise : -p.amountPaise), 0); if (body.direction === 'collection' && body.amountPaise > order.totalPaise - paid) throw new AppError(422, 'PAYMENT_EXCEEDS_BALANCE', 'A collection cannot exceed the current balance.'); order.payments.push({ amountPaise: body.amountPaise, direction: body.direction, method: body.method, noteType: body.direction === 'refund' ? 'refund' : body.amountPaise === order.totalPaise - paid ? 'full' : 'partial', note: body.note, recordedBy: req.auth.user._id }); order.activity.push({ type: 'payment_recorded', actorId: req.auth.user._id, note: body.note }); await order.save(); res.status(201).json({ data: serialize(order) }); }
 async function duePayments(req, res) { const rows = await Order.find({ studioId: req.auth.studio._id, status: { $ne: 'cancelled' }, deletedAt: null }).populate('customerId', 'name phone').sort({ deliveryDate: 1 }); const due = rows.map(serialize).filter((x) => x.outstandingPaise > 0); res.json({ data: due }); }
 async function studio(req, res) { res.json({ data: req.auth.studio }); }
-async function updateStudio(req, res) { const body = z.object({ name: z.string().trim().min(2).max(100).optional(), invoicePrefix: z.string().regex(/^[A-Za-z0-9-]{1,10}$/).optional(), settings: z.object({ measurementUnit: z.enum(['in', 'cm']).optional(), precision: z.enum(['whole', 'half', 'quarter']).optional(), language: z.string().max(10).optional(), currency: z.literal('INR').optional(), garmentAudiences: z.array(z.enum(['men', 'women', 'kids', 'unisex'])).min(1).max(4).optional(), deliveryDays: z.number().int().min(0).max(365).optional(), trialDays: z.number().int().min(0).max(365).optional(), skipSundays: z.boolean().optional(), notifications: z.object({ delivery: z.boolean().optional(), trial: z.boolean().optional() }).optional(), invoice: z.object({ footer: z.string().max(500).optional(), showGst: z.boolean().optional(), showMeasurements: z.boolean().optional() }).optional() }).partial().optional() }).parse(req.body); const update = { ...body }; if (body.settings) { update.settings = { ...req.auth.studio.settings.toObject(), ...body.settings, notifications: { ...req.auth.studio.settings.notifications.toObject(), ...body.settings.notifications }, invoice: { ...req.auth.studio.settings.invoice.toObject(), ...body.settings.invoice } }; } const value = await Studio.findByIdAndUpdate(req.auth.studio._id, update, { new: true, runValidators: true }); if (body.settings?.garmentAudiences) await provisionStarterGarments(value._id, body.settings.garmentAudiences); res.json({ data: value }); }
+async function updateStudio(req, res) {
+  const phoneSchema = z.string().trim().transform((value) => value.replace(/\s|-/g, '')).refine((value) => /^\+?[1-9]\d{9,14}$/.test(value), 'Use a valid mobile number.').transform((value) => value.startsWith('+') ? value : `+91${value}`);
+  const body = z.object({
+    name: z.string().trim().min(2).max(100).optional(),
+    ownerName: z.string().trim().min(2).max(100).optional(),
+    ownerPhone: phoneSchema.optional(),
+    address: z.string().trim().max(500).optional(),
+    businessType: z.enum(['tailoring', 'boutique', 'fashion_designer']).optional(),
+    services: z.array(z.enum(['mens_wear', 'womens_wear', 'kids_wear', 'alteration', 'blouse_stitching', 'uniforms', 'saree_stitching', 'other'])).max(8).optional(),
+    logoMediaId: z.string().regex(/^[a-f\d]{24}$/i).nullable().optional(),
+    invoicePrefix: z.string().regex(/^[A-Za-z0-9-]{1,10}$/).optional(),
+    settings: z.object({ measurementUnit: z.enum(['in', 'cm']).optional(), precision: z.enum(['whole', 'half', 'quarter']).optional(), language: z.string().max(10).optional(), currency: z.literal('INR').optional(), garmentAudiences: z.array(z.enum(['men', 'women', 'kids', 'unisex'])).min(1).max(4).optional(), deliveryDays: z.number().int().min(0).max(365).optional(), trialDays: z.number().int().min(0).max(365).optional(), skipSundays: z.boolean().optional(), notifications: z.object({ delivery: z.boolean().optional(), trial: z.boolean().optional() }).optional(), invoice: z.object({ footer: z.string().max(500).optional(), showGst: z.boolean().optional(), showMeasurements: z.boolean().optional() }).optional() }).partial().optional(),
+  }).parse(req.body);
+  const { ownerName, ownerPhone, ...update } = body;
+  if (body.logoMediaId) {
+    const logo = await Media.findOne({ _id: body.logoMediaId, studioId: req.auth.studio._id, purpose: 'studio_logo', status: 'ready' });
+    if (!logo) throw new AppError(422, 'INVALID_STUDIO_LOGO', 'The selected studio logo is not ready.');
+  }
+  if (ownerPhone && ownerPhone !== req.auth.user.phone) {
+    const existing = await User.exists({ phone: ownerPhone, _id: { $ne: req.auth.user._id } });
+    if (existing) throw new AppError(409, 'PHONE_ALREADY_IN_USE', 'This mobile number belongs to another account.');
+  }
+  if (ownerName || ownerPhone) {
+    if (ownerName) req.auth.user.name = ownerName;
+    if (ownerPhone) req.auth.user.phone = ownerPhone;
+    await req.auth.user.save();
+    if (ownerPhone) await Member.updateOne({ _id: req.auth.member._id }, { phone: ownerPhone });
+  }
+  if (body.settings) {
+    update.settings = { ...req.auth.studio.settings.toObject(), ...body.settings, notifications: { ...req.auth.studio.settings.notifications.toObject(), ...body.settings.notifications }, invoice: { ...req.auth.studio.settings.invoice.toObject(), ...body.settings.invoice } };
+  }
+  if (body.name && ownerName && ownerPhone && body.address && body.businessType && body.services?.length && body.settings?.garmentAudiences?.length) {
+    update.onboardingCompletedAt = new Date();
+  }
+  const value = await Studio.findByIdAndUpdate(req.auth.studio._id, update, { new: true, runValidators: true });
+  if (body.settings?.garmentAudiences) await provisionStarterGarments(value._id, body.settings.garmentAudiences);
+  res.json({ data: { ...value.toObject(), owner: { name: req.auth.user.name, phone: req.auth.user.phone, email: req.auth.user.email } } });
+}
 async function members(req, res) { res.json({ data: await Member.find({ studioId: req.auth.studio._id, status: { $ne: 'removed' } }).populate('userId', 'name phone') }); }
 async function dashboard(req, res) {
   const now = new Date();

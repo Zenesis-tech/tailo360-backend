@@ -22,6 +22,30 @@ const studioSchema = new Schema(
   {
     name: { type: String, required: true },
     ownerUserId: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    address: { type: String, default: "" },
+    businessType: {
+      type: String,
+      enum: ["tailoring", "boutique", "fashion_designer"],
+      default: "tailoring",
+    },
+    services: {
+      type: [{
+        type: String,
+        enum: [
+          "mens_wear",
+          "womens_wear",
+          "kids_wear",
+          "alteration",
+          "blouse_stitching",
+          "uniforms",
+          "saree_stitching",
+          "other",
+        ],
+      }],
+      default: [],
+    },
+    logoMediaId: { type: Schema.Types.ObjectId, ref: "Media", default: null },
+    onboardingCompletedAt: { type: Date, default: null },
     invoicePrefix: { type: String, default: "TL-" },
     referralCode: { type: String, required: true, unique: true },
     orderSequence: { type: Number, default: 0 },

@@ -194,6 +194,50 @@ test('onboarding provisions only the selected garment audiences', async () => {
   expect(templates.body.data.map((template) => template.name)).toEqual(expect.arrayContaining(['Blouse', 'Kurti', 'Salwar suit', 'Lehenga']));
 });
 
+test('shop onboarding persists the owner and business profile', async () => {
+  const verified = await createAccount('+919876543221');
+  const token = verified.body.data.accessToken;
+  const { Media, Member, User } = require('../src/models');
+  const logo = await Media.create({
+    studioId: verified.body.data.studioId,
+    ownerUserId: verified.body.data.user.id,
+    objectKey: 'studio/logo.png',
+    originalName: 'logo.png',
+    contentType: 'image/png',
+    purpose: 'studio_logo',
+    status: 'ready',
+    sizeBytes: 2048,
+  });
+
+  const response = await request(app)
+    .patch('/api/v1/studio')
+    .set('Authorization', `Bearer ${token}`)
+    .send({
+      name: 'Ramesh Tailors',
+      ownerName: 'Ramesh Kumar',
+      ownerPhone: '98765 43221',
+      address: '12 MG Road, Bangalore',
+      businessType: 'tailoring',
+      services: ['mens_wear', 'alteration'],
+      logoMediaId: logo.id,
+      settings: { garmentAudiences: ['men', 'unisex'] },
+    })
+    .expect(200);
+
+  expect(response.body.data).toMatchObject({
+    name: 'Ramesh Tailors',
+    address: '12 MG Road, Bangalore',
+    businessType: 'tailoring',
+    services: ['mens_wear', 'alteration'],
+    logoMediaId: logo.id,
+    onboardingCompletedAt: expect.any(String),
+    owner: { name: 'Ramesh Kumar', phone: '+919876543221' },
+    settings: { garmentAudiences: ['men', 'unisex'] },
+  });
+  expect((await User.findById(verified.body.data.user.id)).name).toBe('Ramesh Kumar');
+  expect((await Member.findOne({ studioId: verified.body.data.studioId })).phone).toBe('+919876543221');
+});
+
 test('standard garments are global while studio-created garments stay private', async () => {
   const first = await createAccount('+919876543217', { garmentAudiences: ['men'] });
   const second = await createAccount('+919876543218', { garmentAudiences: ['men'] });
