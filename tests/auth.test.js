@@ -194,6 +194,31 @@ test('onboarding provisions only the selected garment audiences', async () => {
   expect(templates.body.data.map((template) => template.name)).toEqual(expect.arrayContaining(['Blouse', 'Kurti', 'Salwar suit', 'Lehenga']));
 });
 
+test('settings audience toggles immediately filter order garments', async () => {
+  const verified = await createAccount('+919876543222', {
+    garmentAudiences: ['women'],
+  });
+  const token = verified.body.data.accessToken;
+
+  await request(app)
+    .patch('/api/v1/studio')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ settings: { garmentAudiences: ['kids'] } })
+    .expect(200);
+
+  const templates = await request(app)
+    .get('/api/v1/garment-templates?active=true')
+    .set('Authorization', `Bearer ${token}`)
+    .expect(200);
+  expect(templates.body.data).toHaveLength(3);
+  expect(
+    templates.body.data.every((template) => template.audience === 'kids'),
+  ).toBe(true);
+  expect(templates.body.data.map((template) => template.name)).toEqual(
+    expect.arrayContaining(['Kids shirt', 'Kids trousers', 'Kids dress']),
+  );
+});
+
 test('shop onboarding persists the owner and business profile', async () => {
   const verified = await createAccount('+919876543221');
   const token = verified.body.data.accessToken;
