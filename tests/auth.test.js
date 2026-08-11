@@ -51,10 +51,38 @@ async function createAccount(phone, options = {}) {
 test('OTP provisions a studio and returns a usable token', async () => {
   const verified = await createAccount('+919876543210');
   expect(verified.body.data.isNew).toBe(true);
-  await request(app)
+  const profile = await request(app)
     .get('/api/v1/auth/me')
     .set('Authorization', `Bearer ${verified.body.data.accessToken}`)
     .expect(200);
+  expect(profile.body.data.subscription.status).toBe('trial');
+  expect(new Date(profile.body.data.subscription.trialEndsAt).getTime()).toBeGreaterThan(Date.now());
+});
+
+test('an expired trial keeps reads available and blocks business writes', async () => {
+  const verified = await createAccount('+919876543216');
+  const { Customer, Subscription } = require('../src/models');
+  const customer = await Customer.create({
+    studioId: verified.body.data.studioId,
+    name: 'Read Only Customer',
+    phone: '+919000000216',
+  });
+  await Subscription.updateOne(
+    { studioId: verified.body.data.studioId },
+    { status: 'trial', trialEndsAt: new Date(Date.now() - 60000) },
+  );
+
+  await request(app)
+    .get(`/api/v1/customers/${customer.id}`)
+    .set('Authorization', `Bearer ${verified.body.data.accessToken}`)
+    .expect(200);
+
+  const update = await request(app)
+    .patch(`/api/v1/customers/${customer.id}`)
+    .set('Authorization', `Bearer ${verified.body.data.accessToken}`)
+    .send({ name: 'Should Not Change' })
+    .expect(403);
+  expect(update.body.error.code).toBe('SUBSCRIPTION_RESTRICTED');
 });
 
 test('readiness reports the connected database state', async () => {

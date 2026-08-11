@@ -53,6 +53,7 @@ router.patch(
   "/studio",
   authenticate,
   authorize("settings:write"),
+  requireWritableSubscription,
   ops.updateStudio,
 );
 router.get(
@@ -84,12 +85,14 @@ router.patch(
   "/customers/:id",
   authenticate,
   authorize("customers:write"),
+  requireWritableSubscription,
   customers.update,
 );
 router.delete(
   "/customers/:id",
   authenticate,
   authorize("customers:write"),
+  requireWritableSubscription,
   customers.remove,
 );
 router.get(
@@ -102,6 +105,7 @@ router.put(
   "/customers/:id/measurements/:templateId",
   authenticate,
   authorize("customers:write"),
+  requireWritableSubscription,
   customers.saveMeasurements,
 );
 router.get(
@@ -114,18 +118,21 @@ router.post(
   "/garment-templates",
   authenticate,
   authorize("templates:write"),
+  requireWritableSubscription,
   templates.create,
 );
 router.patch(
   "/garment-templates/:id",
   authenticate,
   authorize("templates:write"),
+  requireWritableSubscription,
   templates.update,
 );
 router.post(
   "/garment-templates/clone",
   authenticate,
   authorize("templates:write"),
+  requireWritableSubscription,
   templates.clone,
 );
 router.get(
@@ -138,6 +145,7 @@ router.put(
   "/pricing/:templateId",
   authenticate,
   authorize("templates:write"),
+  requireWritableSubscription,
   templates.setPrice,
 );
 router.get("/orders", authenticate, authorize("orders:read"), orders.list);
@@ -153,24 +161,28 @@ router.patch(
   "/orders/:id",
   authenticate,
   authorize("orders:write"),
+  requireWritableSubscription,
   orders.update,
 );
 router.post(
   "/orders/:id/status",
   authenticate,
   authorize("orders:status"),
+  requireWritableSubscription,
   orders.changeStatus,
 );
 router.post(
   "/orders/:id/cancel",
   authenticate,
   authorize("orders:write"),
+  requireWritableSubscription,
   orders.cancel,
 );
 router.post(
   "/orders/:id/handover",
   authenticate,
   authorize("orders:status"),
+  requireWritableSubscription,
   orders.handover,
 );
 router.get(
@@ -195,6 +207,7 @@ router.post(
   "/payments",
   authenticate,
   authorize("payments:write"),
+  requireWritableSubscription,
   asyncRoute(idempotent(operationsController.recordPayment)),
 );
 router.get(
@@ -204,9 +217,9 @@ router.get(
   ops.duePayments,
 );
 router.get("/referral", authenticate, ops.referral);
-router.post("/referral/redeem", authenticate, ops.redeemReferral);
-router.post("/media/upload-url", authenticate, media.createUpload);
-router.post("/media/:id/complete", authenticate, media.completeUpload);
+router.post("/referral/redeem", authenticate, requireWritableSubscription, ops.redeemReferral);
+router.post("/media/upload-url", authenticate, requireWritableSubscription, media.createUpload);
+router.post("/media/:id/complete", authenticate, requireWritableSubscription, media.completeUpload);
 router.get("/media/:id/url", authenticate, media.readUrl);
 router.get("/subscription", authenticate, subscriptions.get);
 router.get("/subscription/usage", authenticate, subscriptions.usage);

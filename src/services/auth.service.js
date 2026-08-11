@@ -4,6 +4,18 @@ const { nanoid } = require('nanoid');
 const env = require('../config/env');
 const { User, Studio, Member, Subscription, ReferralRewardConfig, Session, Referral, SubscriptionPlan } = require('../models');
 const { provisionStarterGarments } = require('./garment-catalog.service');
+const starterPlanDefaults = {
+  code: 'starter',
+  name: 'Starter',
+  description: 'Simple order and customer tracking.',
+  active: true,
+  trialDays: 14,
+  monthlyPricePaise: 29900,
+  yearlyPricePaise: 299000,
+  limits: { customers: 80, ordersPerMonth: 150, staffSeats: 1 },
+  features: ['Basic measurement profiles', 'Delivery reminders'],
+  storeProducts: [],
+};
 const hash = (value) => crypto.createHash('sha256').update(value).digest('hex');
 function tokenPair(user, member) {
   const tokenId = nanoid();
@@ -14,7 +26,11 @@ async function createStudioFor(user, { studioName, referralCode, garmentAudience
   const audiences = [...new Set(garmentAudiences)];
   const studio = await Studio.create({ name: studioName || 'My Studio', ownerUserId: user._id, referralCode: `TL${nanoid(7).toUpperCase()}`, settings: { garmentAudiences: audiences } });
   const owner = await Member.create({ studioId: studio._id, userId: user._id, phone: user.phone || `google:${user.googleSubject}`, role: 'owner' });
-  const starter = await SubscriptionPlan.findOne({ code: 'starter', active: true });
+  const starter = await SubscriptionPlan.findOneAndUpdate(
+    { code: 'starter' },
+    { $setOnInsert: starterPlanDefaults },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
   const trialDays = starter?.trialDays ?? 14;
   await Subscription.create({ studioId: studio._id, status: 'trial', plan: 'starter', entitlementSource: 'trial', trialEndsAt: new Date(Date.now() + trialDays * 86400000), seatLimit: starter?.limits.staffSeats ?? 1 });
   await provisionStarterGarments(studio._id, audiences);
