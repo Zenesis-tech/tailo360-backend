@@ -1,4 +1,5 @@
 const { Subscription, SubscriptionPlan, Referral, ReferralRewardConfig } = require('../models');
+const { send: sendNotification } = require('./notification.service');
 
 async function refreshSubscription(subscription) {
   if (!subscription) return subscription;
@@ -6,10 +7,26 @@ async function refreshSubscription(subscription) {
   if (subscription.status === 'trial' && subscription.trialEndsAt && subscription.trialEndsAt <= now) {
     subscription.status = 'expired';
     await subscription.save();
+    sendNotification(subscription.studioId, {
+      type: 'subscription_expired',
+      title: 'Free trial ended',
+      body: 'Choose a plan to continue creating and updating records.',
+      data: { route: 'subscription' },
+      source: 'system',
+      dedupeKey: `subscription:${subscription.id}:expired`,
+    }).catch(console.error);
   }
   if (['active', 'grace_period'].includes(subscription.status) && subscription.periodEndsAt && subscription.periodEndsAt <= now) {
     subscription.status = 'restricted';
     await subscription.save();
+    sendNotification(subscription.studioId, {
+      type: 'subscription_restricted',
+      title: 'Subscription needs attention',
+      body: 'Update your subscription to restore full access.',
+      data: { route: 'subscription' },
+      source: 'system',
+      dedupeKey: `subscription:${subscription.id}:restricted`,
+    }).catch(console.error);
   }
   return subscription;
 }
@@ -40,6 +57,16 @@ async function rewardReferralForStudio(refereeStudioId, qualifyingCondition = 'f
       referrerSubscription.referralCreditPaise = (referrerSubscription.referralCreditPaise || 0) + referral.reward.value * 100;
     }
     await referrerSubscription.save();
+    sendNotification(referral.referrerStudioId, {
+      type: 'referral_rewarded',
+      title: 'Referral reward earned',
+      body: referral.reward.type === 'trial_extension_days'
+        ? `${referral.reward.value} trial days were added to your account.`
+        : `₹${referral.reward.value} referral credit was added.`,
+      data: { route: 'referral' },
+      source: 'system',
+      dedupeKey: `referral:${referral.id}:rewarded`,
+    }).catch(console.error);
     return referral;
   } catch (error) {
     await Referral.updateOne(

@@ -555,6 +555,11 @@ const deviceSchema = new Schema(
     token: { type: String, required: true, unique: true },
     platform: { type: String, enum: ["android", "ios"], required: true },
     active: { type: Boolean, default: true },
+    appVersion: String,
+    locale: String,
+    lastSeenAt: { type: Date, default: Date.now, index: true },
+    disabledAt: Date,
+    disabledReason: String,
   },
   base,
 );
@@ -566,19 +571,40 @@ const notificationSchema = new Schema(
       required: true,
       index: true,
     },
+    userId: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      required: false,
+      index: true,
+    },
     type: String,
     title: String,
     body: String,
     data: Schema.Types.Mixed,
+    source: {
+      type: String,
+      enum: ["workflow", "reminder", "admin", "system"],
+      default: "workflow",
+    },
+    dedupeKey: { type: String, sparse: true },
+    readAt: Date,
     status: {
       type: String,
-      enum: ["queued", "sent", "failed"],
+      enum: ["queued", "sent", "partial", "failed", "stored"],
       default: "queued",
     },
+    deliveredCount: { type: Number, default: 0 },
+    failureCount: { type: Number, default: 0 },
     sentAt: Date,
     error: String,
+    createdBy: { type: Schema.Types.ObjectId, ref: "User" },
   },
   base,
+);
+notificationSchema.index({ userId: 1, readAt: 1, createdAt: -1 });
+notificationSchema.index(
+  { studioId: 1, userId: 1, dedupeKey: 1 },
+  { unique: true, partialFilterExpression: { dedupeKey: { $type: "string" } } },
 );
 const supportSchema = new Schema(
   {

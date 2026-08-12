@@ -4,6 +4,7 @@ const { AppError } = require('../utils/errors');
 const { verifyPurchase, planFor } = require('../services/store-verification.service');
 const { rewardReferralForStudio, expireReferrals } = require('../services/subscription-lifecycle.service');
 const { auditAdmin } = require('../services/audit.service');
+const { send: sendNotification } = require('../services/notification.service');
 function get(req, res) {
   res.set("Cache-Control", "no-store");
   res.json({ data: req.auth.subscription });
@@ -31,6 +32,14 @@ async function validatePurchase(req, res) {
   const subscription = await Subscription.findOneAndUpdate({ studioId: req.auth.studio._id }, { plan: product.code, status: verified.status, platform: verified.platform, entitlementSource: 'store', productId: verified.productId, originalTransactionId: verified.originalTransactionId, periodEndsAt: verified.periodEndsAt, lastVerifiedAt: new Date(), seatLimit: product.limits.staffSeats }, { new: true, upsert: true, setDefaultsOnInsert: true });
   if (verified.status === 'active') await rewardReferralForStudio(req.auth.studio._id);
   await expireReferrals();
+  sendNotification(req.auth.studio._id, {
+    type: verified.status === 'active' ? 'subscription_activated' : 'subscription_updated',
+    title: verified.status === 'active' ? 'Subscription activated' : 'Subscription updated',
+    body: `${product.name} is now ${verified.status}.`,
+    data: { route: 'subscription' },
+    source: 'system',
+    dedupeKey: `purchase:${verified.platform}:${verified.transactionId}`,
+  }).catch(console.error);
   res.json({ data: subscription });
 }
 const planInput = z.object({ code: z.enum(['starter', 'pro', 'studio']), name: z.string().trim().min(2).max(50), description: z.string().trim().max(300).optional(), active: z.boolean().optional(), trialDays: z.number().int().min(0).max(90), monthlyPricePaise: z.number().int().min(0), yearlyPricePaise: z.number().int().min(0), limits: z.object({ customers: z.number().int().min(-1), ordersPerMonth: z.number().int().min(-1), staffSeats: z.number().int().min(1) }), features: z.array(z.string().trim().min(1).max(100)).max(30), storeProducts: z.array(z.object({ platform: z.enum(['google', 'apple']), productId: z.string().trim().min(1).max(150), period: z.enum(['monthly', 'yearly']), active: z.boolean().default(true) })).max(12) });

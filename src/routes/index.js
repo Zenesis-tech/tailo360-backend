@@ -45,7 +45,11 @@ router.get('/events', authenticate, (req, res) => {
 router.get("/dashboard", authenticate, ops.dashboard);
 router.get("/calendar", authenticate, ops.schedule);
 router.post("/devices", authenticate, notifications.register);
+router.delete("/devices", authenticate, notifications.unregister);
 router.get("/notifications", authenticate, notifications.list);
+router.get("/notifications/unread-count", authenticate, notifications.unreadCount);
+router.patch("/notifications/:id/read", authenticate, notifications.markRead);
+router.post("/notifications/read-all", authenticate, notifications.markAllRead);
 router.get("/sync/changes", authenticate, sync.changes);
 router.get("/reports", authenticate, ops.reports);
 router.get("/studio", authenticate, ops.studio);
@@ -318,6 +322,7 @@ router.get("/admin/referrals", authenticate, requirePlatformAdmin, admin.referra
 router.get("/admin/support-tickets", authenticate, requirePlatformAdmin, admin.tickets);
 router.patch("/admin/support-tickets/:id", authenticate, requirePlatformAdmin, admin.updateTicket);
 router.get("/admin/notifications", authenticate, requirePlatformAdmin, admin.notifications);
+router.post("/admin/notifications/send", authenticate, requirePlatformAdmin, notifications.adminSend);
 router.get("/admin/media", authenticate, requirePlatformAdmin, admin.media);
 router.get("/admin/subscription-events", authenticate, requirePlatformAdmin, admin.subscriptionEvents);
 router.get("/admin/audit", authenticate, requirePlatformAdmin, admin.audit);

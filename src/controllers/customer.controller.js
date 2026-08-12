@@ -2,6 +2,7 @@ const { z } = require("zod");
 const { Customer, Order, Measurement, GarmentTemplate } = require("../models");
 const { AppError, notFound } = require("../utils/errors");
 const { escapedSearch } = require("../utils/search");
+const workflowNotifications = require("../services/workflow-notifications.service");
 const customerInput = z.object({
   name: z.string().trim().min(2).max(100),
   phone: z.string().trim().min(10).max(20),
@@ -71,6 +72,7 @@ async function create(req, res) {
     studioId: req.auth.studio._id,
     ...input,
   });
+  workflowNotifications.customerChanged(customer, "created", req.auth.user._id);
   res
     .status(201)
     .json({
@@ -136,6 +138,7 @@ async function update(req, res) {
     );
   Object.assign(customer, body);
   await customer.save();
+  workflowNotifications.customerChanged(customer, "updated", req.auth.user._id);
   res.json({ data: customer });
 }
 async function remove(req, res) {
@@ -214,11 +217,11 @@ async function saveMeasurements(req, res) {
     })
     .parse(req.body);
   const [customer, template] = await Promise.all([
-    Customer.exists({
+    Customer.findOne({
       _id: req.params.id,
       studioId: req.auth.studio._id,
       deletedAt: null,
-    }),
+    }).select("name"),
     GarmentTemplate.findOne({
       _id: req.params.templateId,
       $or: [
@@ -297,6 +300,12 @@ async function saveMeasurements(req, res) {
     unit: input.unit,
     createdBy: req.auth.user._id,
   });
+  workflowNotifications.measurementsUpdated(
+    req.auth.studio._id,
+    req.params.id,
+    customer.name,
+    req.auth.user._id,
+  );
   res.status(201).json({ data: row, meta: { savedAsNewVersion: true } });
 }
 module.exports = {

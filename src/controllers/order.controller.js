@@ -3,6 +3,7 @@ const { Order, Customer, GarmentTemplate, Price } = require("../models");
 const { AppError, notFound } = require("../utils/errors");
 const { canTransition } = require("../utils/order-status");
 const { escapedSearch } = require("../utils/search");
+const workflowNotifications = require("../services/workflow-notifications.service");
 const lineInput = z.object({
   templateId: z.string(),
   quantity: z.number().int().min(1).max(50),
@@ -147,6 +148,7 @@ async function create(req, res) {
       : [],
     activity: [{ type: "created", actorId: req.auth.user._id }],
   });
+  workflowNotifications.orderCreated(order, customer, req.auth.user._id);
   res.status(201).json({ data: serialize(order) });
 }
 async function list(req, res) {
@@ -230,6 +232,7 @@ async function update(req, res) {
   Object.assign(order, body);
   order.activity.push({ type: "edited", actorId: req.auth.user._id });
   await order.save();
+  workflowNotifications.orderUpdated(order, req.auth.user._id);
   res.json({ data: serialize(order) });
 }
 async function changeStatus(req, res) {
@@ -278,6 +281,11 @@ async function changeStatus(req, res) {
     actorId: req.auth.user._id,
   });
   await order.save();
+  workflowNotifications.orderStatusChanged(
+    order,
+    previous,
+    req.auth.user._id,
+  );
   res.json({ data: serialize(order) });
 }
 async function cancel(req, res) {
@@ -328,6 +336,11 @@ async function cancel(req, res) {
     actorId: req.auth.user._id,
   });
   await order.save();
+  workflowNotifications.orderStatusChanged(
+    order,
+    previous,
+    req.auth.user._id,
+  );
   res.json({ data: serialize(order) });
 }
 async function handover(req, res) {
@@ -391,6 +404,19 @@ async function handover(req, res) {
     actorId: req.auth.user._id,
   });
   await order.save();
+  workflowNotifications.orderStatusChanged(
+    order,
+    "ready",
+    req.auth.user._id,
+  );
+  if (body.finalPayment) {
+    workflowNotifications.paymentRecorded(
+      order,
+      body.finalPayment.amountPaise,
+      "collection",
+      req.auth.user._id,
+    );
+  }
   res.json({ data: serialize(order) });
 }
 async function activity(req, res) {

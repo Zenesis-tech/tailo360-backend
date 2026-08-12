@@ -24,6 +24,7 @@ const {
 const { AppError, notFound } = require("../utils/errors");
 const { hashPassword } = require("../services/password.service");
 const { auditAdmin } = require("../services/audit.service");
+const { send: sendNotification } = require("../services/notification.service");
 const { escapedSearch } = require("../utils/search");
 const r2 = require("../services/r2.service");
 const env = require("../config/env");
@@ -375,6 +376,14 @@ async function updateSubscription(req, res) {
     before,
     row,
   );
+  sendNotification(row.studioId, {
+    type: "subscription_updated",
+    title: "Subscription updated",
+    body: `Your Tailo360 subscription is now ${row.status}.`,
+    data: { route: "subscription" },
+    source: "admin",
+    createdBy: req.auth.user._id,
+  }).catch(console.error);
   res.json({ data: row });
 }
 async function grantTestSubscription(req, res) {
@@ -429,6 +438,15 @@ async function grantTestSubscription(req, res) {
       entitlementSource: "admin_test",
     },
   );
+  sendNotification(subscription.studioId, {
+    type: "subscription_activated",
+    title: "Test subscription activated",
+    body: `${plan.name} access is active for ${input.durationDays} days.`,
+    data: { route: "subscription" },
+    source: "admin",
+    createdBy: req.auth.user._id,
+    dedupeKey: `admin-grant:${subscription.id}:${subscription.adminGrant.grantedAt.toISOString()}`,
+  }).catch(console.error);
   res.json({ data: subscription });
 }
 async function orders(req, res) {

@@ -140,6 +140,68 @@ test('dashboard returns backend-derived empty metrics for a new studio', async (
   });
 });
 
+test('notification history tracks unread state and supports admin targeting', async () => {
+  const adminAccount = await createAccount('+919876543231');
+  const recipient = await createAccount('+919876543232');
+  const { User } = require('../src/models');
+  await User.updateOne(
+    { phone: '+919876543231' },
+    { platformRole: 'admin' },
+  );
+
+  const campaign = await request(app)
+    .post('/api/v1/admin/notifications/send')
+    .set('Authorization', `Bearer ${adminAccount.body.data.accessToken}`)
+    .send({
+      target: 'users',
+      userIds: [recipient.body.data.user.id],
+      title: 'Planned maintenance',
+      body: 'Tailo360 will be updated tonight.',
+      data: { route: 'subscription' },
+    })
+    .expect(201);
+  expect(campaign.body.data.recipientCount).toBe(1);
+
+  const history = await request(app)
+    .get('/api/v1/notifications')
+    .set('Authorization', `Bearer ${recipient.body.data.accessToken}`)
+    .expect(200);
+  expect(history.body.meta.unreadCount).toBe(1);
+  expect(history.body.data[0]).toMatchObject({
+    title: 'Planned maintenance',
+    source: 'admin',
+  });
+  expect(history.body.data[0].readAt).toBeFalsy();
+
+  await request(app)
+    .patch(`/api/v1/notifications/${history.body.data[0]._id}/read`)
+    .set('Authorization', `Bearer ${recipient.body.data.accessToken}`)
+    .expect(200);
+  const count = await request(app)
+    .get('/api/v1/notifications/unread-count')
+    .set('Authorization', `Bearer ${recipient.body.data.accessToken}`)
+    .expect(200);
+  expect(count.body.data.count).toBe(0);
+});
+
+test('FCM device registration refreshes metadata and can be deactivated', async () => {
+  const account = await createAccount('+919876543233');
+  const token = `test-fcm-token-${'x'.repeat(40)}`;
+  await request(app)
+    .post('/api/v1/devices')
+    .set('Authorization', `Bearer ${account.body.data.accessToken}`)
+    .send({ token, platform: 'android', appVersion: '0.1.0+1', locale: 'en_IN' })
+    .expect(201);
+  const { Device } = require('../src/models');
+  expect(await Device.countDocuments({ token, active: true })).toBe(1);
+  await request(app)
+    .delete('/api/v1/devices')
+    .set('Authorization', `Bearer ${account.body.data.accessToken}`)
+    .send({ token })
+    .expect(204);
+  expect(await Device.countDocuments({ token, active: false })).toBe(1);
+});
+
 test('async validation failures use the standard API error response', async () => {
   const response = await request(app)
     .post('/api/v1/auth/otp/request')
