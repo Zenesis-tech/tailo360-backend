@@ -970,10 +970,13 @@ async function updateConfig(req, res) {
 async function notifications(req, res) {
   const filter = {};
   if (req.query.status) filter.status = req.query.status;
-  const result = await list(Notification, filter, { createdAt: -1 }, req, {
-    path: "studioId",
-    select: "name",
-  });
+  if (req.query.source) filter.source = req.query.source;
+  if (req.query.type) filter.type = req.query.type;
+  const result = await list(Notification, filter, { createdAt: -1 }, req, [
+    { path: "studioId", select: "name" },
+    { path: "userId", select: "name email phone" },
+    { path: "createdBy", select: "name email" },
+  ]);
   res.json(result);
 }
 async function media(req, res) {

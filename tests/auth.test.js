@@ -162,6 +162,17 @@ test('notification history tracks unread state and supports admin targeting', as
     .expect(201);
   expect(campaign.body.data.recipientCount).toBe(1);
 
+  const adminHistory = await request(app)
+    .get('/api/v1/admin/notifications?source=admin')
+    .set('Authorization', `Bearer ${adminAccount.body.data.accessToken}`)
+    .expect(200);
+  expect(adminHistory.body.data[0]).toMatchObject({
+    title: 'Planned maintenance',
+    source: 'admin',
+    userId: { _id: recipient.body.data.user.id },
+  });
+  expect(adminHistory.body.data[0].studioId.name).toBeTruthy();
+
   const history = await request(app)
     .get('/api/v1/notifications')
     .set('Authorization', `Bearer ${recipient.body.data.accessToken}`)
