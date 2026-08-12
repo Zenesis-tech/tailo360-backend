@@ -140,6 +140,62 @@ test('dashboard returns backend-derived empty metrics for a new studio', async (
   });
 });
 
+test('reports include period performance and current outstanding work', async () => {
+  const verified = await createAccount('+919876543234');
+  const { Customer, Order } = require('../src/models');
+  const customer = await Customer.create({
+    studioId: verified.body.data.studioId,
+    name: 'Report Customer',
+    phone: '+919000000234',
+  });
+  const oldOrder = await Order.create({
+    studioId: verified.body.data.studioId,
+    customerId: customer._id,
+    code: 'RPT-OLD',
+    status: 'stitching',
+    orderDate: new Date(Date.now() - 45 * 86400000),
+    deliveryDate: new Date(Date.now() - 2 * 86400000),
+    totalPaise: 30000,
+    lines: [{ name: 'Kurti', quantity: 1, lineTotalPaise: 30000 }],
+    createdAt: new Date(Date.now() - 45 * 86400000),
+  });
+  const currentOrder = await Order.create({
+    studioId: verified.body.data.studioId,
+    customerId: customer._id,
+    code: 'RPT-NEW',
+    status: 'pending',
+    orderDate: new Date(),
+    deliveryDate: new Date(Date.now() + 2 * 86400000),
+    totalPaise: 20000,
+    lines: [{ name: 'Blouse', quantity: 2, lineTotalPaise: 20000 }],
+    payments: [
+      { amountPaise: 10000, direction: 'collection', method: 'upi', recordedAt: new Date() },
+      { amountPaise: 5000, direction: 'refund', method: 'upi', recordedAt: new Date() },
+    ],
+  });
+
+  const response = await request(app)
+    .get(`/api/v1/reports?from=${encodeURIComponent(new Date(Date.now() - 7 * 86400000).toISOString())}&to=${encodeURIComponent(new Date(Date.now() + 1000).toISOString())}`)
+    .set('Authorization', `Bearer ${verified.body.data.accessToken}`)
+    .expect(200);
+
+  expect(response.body.data).toMatchObject({
+    collectedPaise: 10000,
+    refundedPaise: 5000,
+    netRevenuePaise: 5000,
+    bookedSalesPaise: 20000,
+    orders: 1,
+    uniqueCustomers: 1,
+    statuses: { pending: 1 },
+    paymentMethods: { upi: 5000 },
+  });
+  expect(response.body.data.duePayments.map((row) => row._id)).toEqual(
+    expect.arrayContaining([oldOrder.id, currentOrder.id]),
+  );
+  expect(response.body.data.overdueDeliveries[0]._id).toBe(oldOrder.id);
+  expect(response.body.data.dueDeliveries[0]._id).toBe(currentOrder.id);
+});
+
 test('notification history tracks unread state and supports admin targeting', async () => {
   const adminAccount = await createAccount('+919876543231');
   const recipient = await createAccount('+919876543232');

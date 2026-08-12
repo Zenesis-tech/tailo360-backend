@@ -101,7 +101,122 @@ async function dashboard(req, res) {
     },
   });
 }
-async function reports(req, res) { const range = z.object({ from: z.coerce.date().optional(), to: z.coerce.date().optional() }).parse(req.query); const from = range.from || new Date(new Date().getFullYear(), new Date().getMonth(), 1); const to = range.to || new Date(); if (to < from) throw new AppError(422, 'INVALID_REPORT_RANGE', 'Report end date cannot be before its start date.'); const [rows, revenue] = await Promise.all([Order.find({ studioId: req.auth.studio._id, createdAt: { $gte: from, $lte: to }, deletedAt: null }).populate('customerId', 'name'), Order.aggregate([{ $match: { studioId: req.auth.studio._id, deletedAt: null } }, { $unwind: '$payments' }, { $match: { 'payments.direction': 'collection', 'payments.recordedAt': { $gte: from, $lte: to } } }, { $group: { _id: null, value: { $sum: '$payments.amountPaise' } } }])]); const revenuePaise = revenue[0]?.value || 0; const garments = {}; for (const order of rows) for (const line of order.lines) { const item = garments[line.name] || { quantity: 0, revenuePaise: 0 }; item.quantity += line.quantity; item.revenuePaise += line.lineTotalPaise; garments[line.name] = item; } res.json({ data: { from, to, revenuePaise, orders: rows.length, garments, duePayments: rows.map(serialize).filter((order) => order.outstandingPaise > 0), dueDeliveries: rows.map(serialize).filter((order) => !['delivered', 'cancelled'].includes(order.status) && order.deliveryDate <= to) } }); }
+async function reports(req, res) {
+  const range = z.object({
+    from: z.coerce.date().optional(),
+    to: z.coerce.date().optional(),
+  }).parse(req.query);
+  const now = new Date();
+  const from = range.from || new Date(now.getFullYear(), now.getMonth(), 1);
+  const to = range.to || now;
+  if (to < from) throw new AppError(422, 'INVALID_REPORT_RANGE', 'Report end date cannot be before its start date.');
+  if (to - from > 370 * 86400000) throw new AppError(422, 'REPORT_RANGE_TOO_LARGE', 'Choose a report period of 12 months or less.');
+
+  const duration = to - from;
+  const previousTo = new Date(from.getTime() - 1);
+  const previousFrom = new Date(previousTo.getTime() - duration);
+  const studioId = req.auth.studio._id;
+  const [periodRows, financeRows, activeRows, previousRows, previousFinanceRows] = await Promise.all([
+    Order.find({ studioId, createdAt: { $gte: from, $lte: to }, deletedAt: null }).populate('customerId', 'name phone'),
+    Order.find({ studioId, 'payments.recordedAt': { $gte: from, $lte: to }, deletedAt: null }).populate('customerId', 'name phone'),
+    Order.find({ studioId, status: { $nin: ['delivered', 'cancelled'] }, deletedAt: null }).populate('customerId', 'name phone').sort({ deliveryDate: 1 }),
+    Order.find({ studioId, createdAt: { $gte: previousFrom, $lte: previousTo }, deletedAt: null }).select('status payments totalPaise createdAt'),
+    Order.find({ studioId, 'payments.recordedAt': { $gte: previousFrom, $lte: previousTo }, deletedAt: null }).select('payments'),
+  ]);
+
+  const paymentRows = financeRows.flatMap((order) => order.payments
+    .filter((payment) => payment.recordedAt >= from && payment.recordedAt <= to)
+    .map((payment) => ({ payment, order })));
+  const previousPayments = previousFinanceRows.flatMap((order) => order.payments
+    .filter((payment) => payment.recordedAt >= previousFrom && payment.recordedAt <= previousTo));
+  const collectedPaise = paymentRows.filter(({ payment }) => payment.direction === 'collection').reduce((sum, { payment }) => sum + payment.amountPaise, 0);
+  const refundedPaise = paymentRows.filter(({ payment }) => payment.direction === 'refund').reduce((sum, { payment }) => sum + payment.amountPaise, 0);
+  const previousCollected = previousPayments.filter((payment) => payment.direction === 'collection').reduce((sum, payment) => sum + payment.amountPaise, 0)
+    - previousPayments.filter((payment) => payment.direction === 'refund').reduce((sum, payment) => sum + payment.amountPaise, 0);
+  const reportOrders = periodRows.filter((order) => order.status !== 'cancelled');
+  const bookedSalesPaise = reportOrders.reduce((sum, order) => sum + order.totalPaise, 0);
+  const serializedActive = activeRows.map(serialize);
+  const duePayments = serializedActive.filter((order) => order.outstandingPaise > 0);
+  const outstandingPaise = duePayments.reduce((sum, order) => sum + order.outstandingPaise, 0);
+  const nextWeek = new Date(now.getTime() + 7 * 86400000);
+  const overdueDeliveries = serializedActive.filter((order) => order.deliveryDate < now);
+  const dueDeliveries = serializedActive.filter((order) => order.deliveryDate >= now && order.deliveryDate < nextWeek);
+
+  const garments = {};
+  const statuses = {};
+  const customers = new Map();
+  for (const order of periodRows) {
+    statuses[order.status] = (statuses[order.status] || 0) + 1;
+    if (order.status === 'cancelled') continue;
+    for (const line of order.lines) {
+      const item = garments[line.name] || { quantity: 0, revenuePaise: 0, orders: 0 };
+      item.quantity += line.quantity;
+      item.revenuePaise += line.lineTotalPaise;
+      item.orders += 1;
+      garments[line.name] = item;
+    }
+    const customerId = order.customerId?._id?.toString() || order.customerId?.toString();
+    if (customerId) {
+      const customer = customers.get(customerId) || { id: customerId, name: order.customerId?.name || 'Customer', phone: order.customerId?.phone || '', orders: 0, valuePaise: 0 };
+      customer.orders += 1;
+      customer.valuePaise += order.totalPaise;
+      customers.set(customerId, customer);
+    }
+  }
+
+  const istDayKey = (date) => new Date(date.getTime() + 330 * 60000).toISOString().slice(0, 10);
+  const daily = new Map();
+  for (const order of reportOrders) {
+    const key = istDayKey(order.createdAt);
+    const item = daily.get(key) || { date: key, orders: 0, bookedPaise: 0, collectedPaise: 0 };
+    item.orders += 1;
+    item.bookedPaise += order.totalPaise;
+    daily.set(key, item);
+  }
+  for (const { payment } of paymentRows) {
+    const key = istDayKey(payment.recordedAt);
+    const item = daily.get(key) || { date: key, orders: 0, bookedPaise: 0, collectedPaise: 0 };
+    item.collectedPaise += payment.direction === 'collection' ? payment.amountPaise : -payment.amountPaise;
+    daily.set(key, item);
+  }
+  const paymentMethods = {};
+  for (const { payment } of paymentRows) {
+    const signedAmount = payment.direction === 'collection' ? payment.amountPaise : -payment.amountPaise;
+    paymentMethods[payment.method] = (paymentMethods[payment.method] || 0) + signedAmount;
+  }
+  const completed = periodRows.filter((order) => order.status === 'delivered').length;
+  const completionBase = periodRows.filter((order) => order.status !== 'cancelled').length;
+  const percentChange = (current, previous) => previous === 0 ? (current === 0 ? 0 : 100) : Math.round(((current - previous) / previous) * 1000) / 10;
+  const topCustomers = [...customers.values()].sort((a, b) => b.valuePaise - a.valuePaise).slice(0, 5);
+
+  res.json({ data: {
+    from,
+    to,
+    revenuePaise: collectedPaise,
+    collectedPaise,
+    refundedPaise,
+    netRevenuePaise: collectedPaise - refundedPaise,
+    bookedSalesPaise,
+    outstandingPaise,
+    orders: periodRows.length,
+    averageOrderPaise: reportOrders.length ? Math.round(bookedSalesPaise / reportOrders.length) : 0,
+    completionRate: completionBase ? Math.round((completed / completionBase) * 1000) / 10 : 0,
+    uniqueCustomers: customers.size,
+    repeatCustomers: [...customers.values()].filter((customer) => customer.orders > 1).length,
+    statuses,
+    garments,
+    paymentMethods,
+    daily: [...daily.values()].sort((a, b) => a.date.localeCompare(b.date)),
+    topCustomers,
+    duePayments,
+    dueDeliveries,
+    overdueDeliveries,
+    comparison: {
+      revenuePercent: percentChange(collectedPaise - refundedPaise, previousCollected),
+      ordersPercent: percentChange(periodRows.length, previousRows.length),
+    },
+  } });
+}
 async function referral(req, res) {
   await expireReferrals();
   const [rows, applied, config] = await Promise.all([
