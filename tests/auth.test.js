@@ -583,3 +583,83 @@ test('platform admin can delete unused garments but referenced garments are prot
   expect(blocked.body.error.details.prices).toBe(1);
   expect(await GarmentTemplate.findById(used.id)).not.toBeNull();
 });
+
+test('referral center redeems a live signup offer and returns real reward history', async () => {
+  const referrer = await createAccount('+919876543223', { studioName: 'Referrer Studio' });
+  const referee = await createAccount('+919876543224', { studioName: 'New Studio' });
+  const { ReferralRewardConfig, Studio, Subscription } = require('../src/models');
+  await ReferralRewardConfig.updateMany({ active: true }, { active: false });
+  await ReferralRewardConfig.create({
+    version: 9001,
+    active: true,
+    qualifyingCondition: 'signup_complete',
+    reward: { type: 'account_credit', value: 125 },
+    expiryDays: 30,
+  });
+  const referrerStudio = await Studio.findById(referrer.body.data.studioId);
+
+  const redeemed = await request(app)
+    .post('/api/v1/referral/redeem')
+    .set('Authorization', `Bearer ${referee.body.data.accessToken}`)
+    .send({ code: referrerStudio.referralCode.toLowerCase() })
+    .expect(201);
+  expect(redeemed.body.data.status).toBe('rewarded');
+  expect((await Subscription.findOne({ studioId: referrerStudio._id })).referralCreditPaise).toBe(12500);
+
+  const duplicate = await request(app)
+    .post('/api/v1/referral/redeem')
+    .set('Authorization', `Bearer ${referee.body.data.accessToken}`)
+    .send({ code: referrerStudio.referralCode })
+    .expect(409);
+  expect(duplicate.body.error.code).toBe('REFERRAL_ALREADY_REDEEMED');
+  expect((await Subscription.findOne({ studioId: referrerStudio._id })).referralCreditPaise).toBe(12500);
+
+  const center = await request(app)
+    .get('/api/v1/referral')
+    .set('Authorization', `Bearer ${referrer.body.data.accessToken}`)
+    .expect(200);
+  expect(center.body.data.offer).toMatchObject({
+    qualifyingCondition: 'signup_complete',
+    reward: { type: 'account_credit', value: 125 },
+    expiryDays: 30,
+  });
+  expect(center.body.data.summary).toMatchObject({ rewarded: 1, earnedCreditPaise: 12500 });
+  expect(center.body.data.history[0]).toMatchObject({ studioName: 'New Studio', status: 'rewarded' });
+
+  const applied = await request(app)
+    .get('/api/v1/referral')
+    .set('Authorization', `Bearer ${referee.body.data.accessToken}`)
+    .expect(200);
+  expect(applied.body.data.appliedReferral).toMatchObject({
+    code: referrerStudio.referralCode,
+    studioName: 'Referrer Studio',
+    status: 'rewarded',
+  });
+});
+
+test('paid referral reward is idempotent when triggered concurrently', async () => {
+  const referrer = await createAccount('+919876543225');
+  const referee = await createAccount('+919876543226');
+  const { Referral, Subscription } = require('../src/models');
+  const { rewardReferralForStudio } = require('../src/services/subscription-lifecycle.service');
+  const before = await Subscription.findOne({ studioId: referrer.body.data.studioId });
+  const originalTrialEnd = before.trialEndsAt.getTime();
+  await Referral.create({
+    referrerStudioId: referrer.body.data.studioId,
+    refereeStudioId: referee.body.data.studioId,
+    code: 'TESTREF',
+    qualifyingCondition: 'first_paid_subscription',
+    reward: { type: 'trial_extension_days', value: 3 },
+    expiresAt: new Date(Date.now() + 86400000),
+  });
+
+  await Promise.all([
+    rewardReferralForStudio(referee.body.data.studioId),
+    rewardReferralForStudio(referee.body.data.studioId),
+    rewardReferralForStudio(referee.body.data.studioId),
+  ]);
+
+  const after = await Subscription.findOne({ studioId: referrer.body.data.studioId });
+  expect(after.trialEndsAt.getTime() - originalTrialEnd).toBe(3 * 86400000);
+  expect((await Referral.findOne({ refereeStudioId: referee.body.data.studioId })).status).toBe('rewarded');
+});

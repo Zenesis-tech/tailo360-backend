@@ -1,9 +1,11 @@
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
-const { nanoid } = require('nanoid');
+const { nanoid, customAlphabet } = require('nanoid');
 const env = require('../config/env');
 const { User, Studio, Member, Subscription, ReferralRewardConfig, Session, Referral, SubscriptionPlan } = require('../models');
 const { provisionStarterGarments } = require('./garment-catalog.service');
+const { rewardReferralForStudio } = require('./subscription-lifecycle.service');
+const referralId = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ', 7);
 const starterPlanDefaults = {
   code: 'starter',
   name: 'Starter',
@@ -24,7 +26,7 @@ function tokenPair(user, member) {
 }
 async function createStudioFor(user, { studioName, referralCode, garmentAudiences = ['men', 'women'] }) {
   const audiences = [...new Set(garmentAudiences)];
-  const studio = await Studio.create({ name: studioName || 'My Studio', ownerUserId: user._id, referralCode: `TL${nanoid(7).toUpperCase()}`, settings: { garmentAudiences: audiences } });
+  const studio = await Studio.create({ name: studioName || 'My Studio', ownerUserId: user._id, referralCode: `TL${referralId()}`, settings: { garmentAudiences: audiences } });
   const owner = await Member.create({ studioId: studio._id, userId: user._id, phone: user.phone || `google:${user.googleSubject}`, role: 'owner' });
   const starter = await SubscriptionPlan.findOneAndUpdate(
     { code: 'starter' },
@@ -38,7 +40,10 @@ async function createStudioFor(user, { studioName, referralCode, garmentAudience
     const referrer = await Studio.findOne({ referralCode: referralCode.toUpperCase() });
     if (referrer && !referrer.ownerUserId.equals(user._id)) {
       const config = await ReferralRewardConfig.findOne({ active: true }).sort({ version: -1 });
-      if (config) await Referral.create({ referrerStudioId: referrer._id, refereeStudioId: studio._id, code: referrer.referralCode, configVersion: config.version, qualifyingCondition: config.qualifyingCondition, reward: config.reward, expiresAt: new Date(Date.now() + config.expiryDays * 86400000) });
+      if (config) {
+        await Referral.create({ referrerStudioId: referrer._id, refereeStudioId: studio._id, code: referrer.referralCode, configVersion: config.version, qualifyingCondition: config.qualifyingCondition, reward: config.reward, expiresAt: new Date(Date.now() + config.expiryDays * 86400000) });
+        if (config.qualifyingCondition === 'signup_complete') await rewardReferralForStudio(studio._id, 'signup_complete');
+      }
     }
   }
   return { studio, owner };

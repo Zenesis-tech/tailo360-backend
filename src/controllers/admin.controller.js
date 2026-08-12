@@ -348,7 +348,21 @@ async function updateSubscription(req, res) {
     if (input.seatLimit === undefined) input.seatLimit = plan.limits.staffSeats;
   }
   const before = await Subscription.findById(req.params.id);
-  const row = await Subscription.findByIdAndUpdate(req.params.id, input, {
+  const unset = {};
+  if (input.status === "trial" || input.trialEndsAt) {
+    unset.periodEndsAt = 1;
+  }
+  if (
+    ["active", "grace_period", "restricted", "cancelled"].includes(
+      input.status,
+    ) || input.periodEndsAt
+  ) {
+    unset.trialEndsAt = 1;
+  }
+  const update = Object.keys(unset).length
+    ? { $set: input, $unset: unset }
+    : { $set: input };
+  const row = await Subscription.findByIdAndUpdate(req.params.id, update, {
     new: true,
     runValidators: true,
   });
@@ -389,7 +403,9 @@ async function grantTestSubscription(req, res) {
   subscription.periodEndsAt = new Date(
     Date.now() + input.durationDays * 86400000,
   );
-  subscription.trialEndsAt = undefined;
+  // Explicitly clear the old trial deadline. Keeping both dates caused
+  // clients/admin views to continue showing the original 14-day trial.
+  subscription.trialEndsAt = null;
   subscription.platform = undefined;
   subscription.productId = undefined;
   subscription.originalTransactionId = undefined;

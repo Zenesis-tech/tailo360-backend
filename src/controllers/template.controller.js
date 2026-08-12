@@ -73,6 +73,7 @@ const normalize = (value) => ({
   })),
 });
 const visibleToStudio = (studioId) => ({
+  deletedAt: null,
   $or: [{ scope: "global" }, { studioId, scope: { $ne: "global" } }],
 });
 async function withDiagramUrls(rows) {
@@ -212,6 +213,26 @@ async function clone(req, res) {
   });
   res.status(201).json({ data: row });
 }
+async function remove(req, res) {
+  const row = await GarmentTemplate.findOne({
+    _id: req.params.id,
+    studioId: req.auth.studio._id,
+    scope: { $ne: "global" },
+    deletedAt: null,
+  });
+  if (!row) throw notFound("Studio garment template");
+  row.active = false;
+  row.deletedAt = new Date();
+  // Keep historical measurement/order references intact while freeing the
+  // user-facing name so a replacement template can be created later.
+  row.name = `${row.name} [deleted ${row._id}]`;
+  await row.save();
+  await Price.updateMany(
+    { studioId: req.auth.studio._id, templateId: row._id, active: true },
+    { active: false },
+  );
+  res.status(204).send();
+}
 async function prices(req, res) {
   const rows = await Price.find({
     studioId: req.auth.studio._id,
@@ -247,4 +268,4 @@ async function setPrice(req, res) {
   });
   res.json({ data: price });
 }
-module.exports = { list, create, update, clone, prices, setPrice };
+module.exports = { list, create, update, clone, remove, prices, setPrice };

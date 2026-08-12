@@ -96,12 +96,16 @@ function pdfFor(order, studio) {
   });
 }
 
-async function createInvoiceFile(order, auth) {
+async function createInvoiceFile(order, auth, { includeUrl = true } = {}) {
   const buffer = await pdfFor(order, auth.studio);
   const key = `${auth.studio._id}/invoices/${order.code}-${nanoid(10)}.pdf`;
   await r2.putObject({ key, body: buffer, contentType: 'application/pdf' });
   const media = await Media.create({ studioId: auth.studio._id, ownerUserId: auth.user._id, objectKey: key, originalName: `${order.code}.pdf`, contentType: 'application/pdf', sizeBytes: buffer.length, purpose: 'invoice_pdf', status: 'ready' });
-  return { media, url: await r2.createReadUrl(key) };
+  return {
+    media,
+    buffer,
+    url: includeUrl ? await r2.createReadUrl(key) : undefined,
+  };
 }
 
 async function invoice(req, res) {
@@ -118,10 +122,10 @@ async function share(req, res) {
   const order = await Order.findOne({ _id: req.params.id, studioId: req.auth.studio._id, deletedAt: null })
     .populate('customerId', 'name phone');
   if (!order) throw notFound('Order');
-  const { media, url } = await createInvoiceFile(order, req.auth);
+  const { media, buffer } = await createInvoiceFile(order, req.auth, { includeUrl: false });
   order.activity.push({ type: 'invoice_shared', actorId: req.auth.user._id, note: 'WhatsApp share text requested.' });
   await order.save();
-  res.json({ data: { phone: order.customerId.phone, mediaId: media.id, downloadUrl: url, expiresInSeconds: 900, shareText: `Hello ${order.customerId.name}, your invoice ${order.code} is ready. Total ${money(order.totalPaise)}. Balance ${money(order.totalPaise - paidFor(order))}. Download invoice: ${url}` } });
+  res.json({ data: { phone: order.customerId.phone, mediaId: media.id, fileName: `${order.code}.pdf`, contentType: 'application/pdf', pdfBase64: buffer.toString('base64'), shareText: `Hello ${order.customerId.name}, your invoice ${order.code} is attached. Total ${money(order.totalPaise)}. Balance ${money(order.totalPaise - paidFor(order))}.` } });
 }
 
 module.exports = { invoice, share };

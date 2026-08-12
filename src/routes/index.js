@@ -135,6 +135,13 @@ router.post(
   requireWritableSubscription,
   templates.clone,
 );
+router.delete(
+  "/garment-templates/:id",
+  authenticate,
+  authorize("templates:write"),
+  requireWritableSubscription,
+  templates.remove,
+);
 router.get(
   "/pricing",
   authenticate,
@@ -217,7 +224,7 @@ router.get(
   ops.duePayments,
 );
 router.get("/referral", authenticate, ops.referral);
-router.post("/referral/redeem", authenticate, requireWritableSubscription, ops.redeemReferral);
+router.post("/referral/redeem", authenticate, ops.redeemReferral);
 router.post("/media/upload-url", authenticate, requireWritableSubscription, media.createUpload);
 router.post("/media/:id/complete", authenticate, requireWritableSubscription, media.completeUpload);
 router.get("/media/:id/url", authenticate, media.readUrl);

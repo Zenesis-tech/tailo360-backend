@@ -1,4 +1,4 @@
-const { z } = require('zod'); const { Order, Studio, Member, Referral, ReferralRewardConfig, Customer, Notification, User, Media } = require('../models'); const { AppError, notFound } = require('../utils/errors'); const { serialize } = require('./order.controller'); const { activeReferralConfig, expireReferrals } = require('../services/subscription-lifecycle.service'); const { provisionStarterGarments } = require('../services/garment-catalog.service');
+const { z } = require('zod'); const { Order, Studio, Member, Referral, ReferralRewardConfig, Customer, Notification, User, Media } = require('../models'); const { AppError, notFound } = require('../utils/errors'); const { serialize } = require('./order.controller'); const { activeReferralConfig, expireReferrals, rewardReferralForStudio } = require('../services/subscription-lifecycle.service'); const { provisionStarterGarments } = require('../services/garment-catalog.service');
 async function recordPayment(req, res) { const body = z.object({ orderId: z.string(), amountPaise: z.number().int().positive(), direction: z.enum(['collection', 'refund']).default('collection'), method: z.enum(['cash', 'upi', 'card', 'bank']), note: z.string().max(500).optional() }).parse(req.body); const order = await Order.findOne({ _id: body.orderId, studioId: req.auth.studio._id, deletedAt: null }); if (!order) throw notFound('Order'); if (body.direction === 'refund' && req.auth.member.role !== 'owner') throw new AppError(403, 'FORBIDDEN', 'Only an owner can record a refund.'); const paid = order.payments.reduce((sum, p) => sum + (p.direction === 'collection' ? p.amountPaise : -p.amountPaise), 0); if (body.direction === 'collection' && body.amountPaise > order.totalPaise - paid) throw new AppError(422, 'PAYMENT_EXCEEDS_BALANCE', 'A collection cannot exceed the current balance.'); order.payments.push({ amountPaise: body.amountPaise, direction: body.direction, method: body.method, noteType: body.direction === 'refund' ? 'refund' : body.amountPaise === order.totalPaise - paid ? 'full' : 'partial', note: body.note, recordedBy: req.auth.user._id }); order.activity.push({ type: 'payment_recorded', actorId: req.auth.user._id, note: body.note }); await order.save(); res.status(201).json({ data: serialize(order) }); }
 async function duePayments(req, res) { const rows = await Order.find({ studioId: req.auth.studio._id, status: { $ne: 'cancelled' }, deletedAt: null }).populate('customerId', 'name phone').sort({ deliveryDate: 1 }); const due = rows.map(serialize).filter((x) => x.outstandingPaise > 0); res.json({ data: due }); }
 async function studio(req, res) { res.json({ data: req.auth.studio }); }
@@ -101,8 +101,65 @@ async function dashboard(req, res) {
   });
 }
 async function reports(req, res) { const range = z.object({ from: z.coerce.date().optional(), to: z.coerce.date().optional() }).parse(req.query); const from = range.from || new Date(new Date().getFullYear(), new Date().getMonth(), 1); const to = range.to || new Date(); if (to < from) throw new AppError(422, 'INVALID_REPORT_RANGE', 'Report end date cannot be before its start date.'); const [rows, revenue] = await Promise.all([Order.find({ studioId: req.auth.studio._id, createdAt: { $gte: from, $lte: to }, deletedAt: null }).populate('customerId', 'name'), Order.aggregate([{ $match: { studioId: req.auth.studio._id, deletedAt: null } }, { $unwind: '$payments' }, { $match: { 'payments.direction': 'collection', 'payments.recordedAt': { $gte: from, $lte: to } } }, { $group: { _id: null, value: { $sum: '$payments.amountPaise' } } }])]); const revenuePaise = revenue[0]?.value || 0; const garments = {}; for (const order of rows) for (const line of order.lines) { const item = garments[line.name] || { quantity: 0, revenuePaise: 0 }; item.quantity += line.quantity; item.revenuePaise += line.lineTotalPaise; garments[line.name] = item; } res.json({ data: { from, to, revenuePaise, orders: rows.length, garments, duePayments: rows.map(serialize).filter((order) => order.outstandingPaise > 0), dueDeliveries: rows.map(serialize).filter((order) => !['delivered', 'cancelled'].includes(order.status) && order.deliveryDate <= to) } }); }
-async function referral(req, res) { await expireReferrals(); const rows = await Referral.find({ referrerStudioId: req.auth.studio._id }).populate('refereeStudioId', 'name createdAt').sort({ createdAt: -1 }); res.json({ data: { code: req.auth.studio.referralCode, history: rows, summary: { pending: rows.filter((x) => x.status === 'pending').length, rewarded: rows.filter((x) => x.status === 'rewarded').length, expired: rows.filter((x) => x.status === 'expired_void').length } } }); }
-async function redeemReferral(req, res) { const code = z.object({ code: z.string().trim().toUpperCase().regex(/^[A-Z0-9]{6,10}$/) }).parse(req.body).code; const existing = await Referral.findOne({ refereeStudioId: req.auth.studio._id }); if (existing) throw new AppError(409, 'REFERRAL_ALREADY_REDEEMED', 'A referral code has already been applied to this studio.'); const referrer = await Studio.findOne({ referralCode: code }); if (!referrer || referrer._id.equals(req.auth.studio._id)) throw new AppError(422, 'REFERRAL_INVALID', 'This referral code is not valid.'); const config = await activeReferralConfig(); if (!config) throw new AppError(503, 'REFERRALS_UNAVAILABLE', 'Referral rewards are not configured.'); const row = await Referral.create({ referrerStudioId: referrer._id, refereeStudioId: req.auth.studio._id, code, configVersion: config.version, qualifyingCondition: config.qualifyingCondition, reward: config.reward, expiresAt: new Date(Date.now() + config.expiryDays * 86400000) }); res.status(201).json({ data: row }); }
+async function referral(req, res) {
+  await expireReferrals();
+  const [rows, applied, config] = await Promise.all([
+    Referral.find({ referrerStudioId: req.auth.studio._id }).populate('refereeStudioId', 'name createdAt').sort({ createdAt: -1 }),
+    Referral.findOne({ refereeStudioId: req.auth.studio._id }).populate('referrerStudioId', 'name'),
+    activeReferralConfig(),
+  ]);
+  const history = rows.map((row) => ({
+    id: row._id,
+    studioName: row.refereeStudioId?.name || 'Referred studio',
+    joinedAt: row.refereeStudioId?.createdAt || row.createdAt,
+    status: row.status,
+    qualifyingCondition: row.qualifyingCondition,
+    reward: row.reward,
+    expiresAt: row.expiresAt,
+    rewardedAt: row.rewardedAt,
+  }));
+  const rewarded = rows.filter((row) => row.status === 'rewarded');
+  res.json({ data: {
+    code: req.auth.studio.referralCode,
+    offer: config ? { qualifyingCondition: config.qualifyingCondition, reward: config.reward, expiryDays: config.expiryDays } : null,
+    appliedReferral: applied ? {
+      code: applied.code,
+      studioName: applied.referrerStudioId?.name || 'Referring studio',
+      status: applied.status,
+      qualifyingCondition: applied.qualifyingCondition,
+      reward: applied.reward,
+      expiresAt: applied.expiresAt,
+      rewardedAt: applied.rewardedAt,
+    } : null,
+    history,
+    summary: {
+      pending: rows.filter((row) => row.status === 'pending').length,
+      rewarded: rewarded.length,
+      expired: rows.filter((row) => row.status === 'expired_void').length,
+      earnedTrialDays: rewarded.filter((row) => row.reward.type === 'trial_extension_days').reduce((sum, row) => sum + row.reward.value, 0),
+      earnedCreditPaise: rewarded.filter((row) => row.reward.type === 'account_credit').reduce((sum, row) => sum + row.reward.value * 100, 0),
+    },
+  } });
+}
+async function redeemReferral(req, res) {
+  // `_` and `-` keep referral codes issued by older NanoID builds usable.
+  const code = z.object({ code: z.string().trim().toUpperCase().regex(/^[A-Z0-9_-]{6,10}$/, 'Enter a valid referral code.') }).parse(req.body).code;
+  const existing = await Referral.findOne({ refereeStudioId: req.auth.studio._id });
+  if (existing) throw new AppError(409, 'REFERRAL_ALREADY_REDEEMED', 'A referral code has already been applied to this studio.');
+  const referrer = await Studio.findOne({ referralCode: code });
+  if (!referrer || referrer._id.equals(req.auth.studio._id)) throw new AppError(422, 'REFERRAL_INVALID', 'This referral code is not valid.');
+  const config = await activeReferralConfig();
+  if (!config) throw new AppError(503, 'REFERRALS_UNAVAILABLE', 'Referral rewards are not configured.');
+  let row;
+  try {
+    row = await Referral.create({ referrerStudioId: referrer._id, refereeStudioId: req.auth.studio._id, code, configVersion: config.version, qualifyingCondition: config.qualifyingCondition, reward: config.reward, expiresAt: new Date(Date.now() + config.expiryDays * 86400000) });
+  } catch (error) {
+    if (error?.code === 11000) throw new AppError(409, 'REFERRAL_ALREADY_REDEEMED', 'A referral code has already been applied to this studio.');
+    throw error;
+  }
+  if (config.qualifyingCondition === 'signup_complete') row = await rewardReferralForStudio(req.auth.studio._id, 'signup_complete') || row;
+  res.status(201).json({ data: row });
+}
 async function schedule(req, res) { const from = req.query.from ? new Date(req.query.from) : new Date(), to = req.query.to ? new Date(req.query.to) : new Date(from.getTime() + 7 * 86400000); const rows = await Order.find({ studioId: req.auth.studio._id, status: { $nin: ['delivered', 'cancelled'] }, $or: [{ trialDate: { $gte: from, $lte: to } }, { deliveryDate: { $gte: from, $lte: to } }] }).populate('customerId', 'name phone'); res.json({ data: rows.map(serialize), meta: { from, to } }); }
 const rewardConfigInput = z.object({ qualifyingCondition: z.enum(['signup_complete', 'first_paid_subscription']), reward: z.object({ type: z.enum(['trial_extension_days', 'account_credit']), value: z.number().int().positive() }), expiryDays: z.number().int().min(1).max(365), active: z.boolean().optional() });
 async function adminReferralConfigs(req, res) { res.json({ data: await ReferralRewardConfig.find().sort({ version: -1 }) }); }

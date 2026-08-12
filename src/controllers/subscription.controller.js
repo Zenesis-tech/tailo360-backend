@@ -4,7 +4,10 @@ const { AppError } = require('../utils/errors');
 const { verifyPurchase, planFor } = require('../services/store-verification.service');
 const { rewardReferralForStudio, expireReferrals } = require('../services/subscription-lifecycle.service');
 const { auditAdmin } = require('../services/audit.service');
-function get(req, res) { res.json({ data: req.auth.subscription }); }
+function get(req, res) {
+  res.set("Cache-Control", "no-store");
+  res.json({ data: req.auth.subscription });
+}
 async function usage(req, res) {
   const studioId = req.auth.studio._id;
   const monthStart = new Date();

@@ -192,6 +192,7 @@ const templateSchema = new Schema(
       index: true,
     },
     active: { type: Boolean, default: true },
+    deletedAt: { type: Date, default: null },
     garmentIconUrl: {
       type: String,
       trim: true,
@@ -377,6 +378,7 @@ const subscriptionSchema = new Schema(
     trialEndsAt: Date,
     periodEndsAt: Date,
     seatLimit: { type: Number, default: 1 },
+    referralCreditPaise: { type: Number, default: 0, min: 0 },
     lastVerifiedAt: Date,
   },
   base,
