@@ -226,11 +226,13 @@ async function remove(req, res) {
   // Keep historical measurement/order references intact while freeing the
   // user-facing name so a replacement template can be created later.
   row.name = `${row.name} [deleted ${row._id}]`;
-  await row.save();
-  await Price.updateMany(
-    { studioId: req.auth.studio._id, templateId: row._id, active: true },
-    { active: false },
-  );
+  await Promise.all([
+    row.save(),
+    Price.updateMany(
+      { studioId: req.auth.studio._id, templateId: row._id, active: true },
+      { active: false },
+    ),
+  ]);
   res.status(204).send();
 }
 async function prices(req, res) {

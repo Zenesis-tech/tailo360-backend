@@ -13,5 +13,10 @@ async function createUploadUrl({ key, contentType }) { return getSignedUrl(clien
 async function createReadUrl(key) { return getSignedUrl(client(), new GetObjectCommand({ Bucket: env.R2_BUCKET, Key: key }), { expiresIn: env.R2_SIGNED_URL_TTL_SECONDS }); }
 async function objectMetadata(key) { return client().send(new HeadObjectCommand({ Bucket: env.R2_BUCKET, Key: key })); }
 async function putObject({ key, body, contentType }) { return client().send(new PutObjectCommand({ Bucket: env.R2_BUCKET, Key: key, Body: body, ContentType: contentType })); }
+async function getObject(key) {
+  const response = await client().send(new GetObjectCommand({ Bucket: env.R2_BUCKET, Key: key }));
+  if (!response.Body) return null;
+  return Buffer.from(await response.Body.transformToByteArray());
+}
 async function deleteObject(key) { return client().send(new DeleteObjectCommand({ Bucket: env.R2_BUCKET, Key: key })); }
-module.exports = { createUploadUrl, createReadUrl, objectMetadata, putObject, deleteObject };
+module.exports = { createUploadUrl, createReadUrl, objectMetadata, putObject, getObject, deleteObject };

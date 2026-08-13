@@ -173,6 +173,17 @@ test('reports include period performance and current outstanding work', async ()
       { amountPaise: 5000, direction: 'refund', method: 'upi', recordedAt: new Date() },
     ],
   });
+  const deliveredUnpaidOrder = await Order.create({
+    studioId: verified.body.data.studioId,
+    customerId: customer._id,
+    code: 'RPT-DELIVERED-DUE',
+    status: 'delivered',
+    orderDate: new Date(Date.now() - 10 * 86400000),
+    deliveryDate: new Date(Date.now() - 3 * 86400000),
+    createdAt: new Date(Date.now() - 10 * 86400000),
+    totalPaise: 15000,
+    lines: [{ name: 'Trousers', quantity: 1, lineTotalPaise: 15000 }],
+  });
 
   const response = await request(app)
     .get(`/api/v1/reports?from=${encodeURIComponent(new Date(Date.now() - 7 * 86400000).toISOString())}&to=${encodeURIComponent(new Date(Date.now() + 1000).toISOString())}`)
@@ -191,7 +202,11 @@ test('reports include period performance and current outstanding work', async ()
     paymentMethods: { upi: 5000 },
   });
   expect(response.body.data.duePayments.map((row) => row._id)).toEqual(
-    expect.arrayContaining([oldOrder.id, currentOrder.id]),
+    expect.arrayContaining([
+      oldOrder.id,
+      currentOrder.id,
+      deliveredUnpaidOrder.id,
+    ]),
   );
   expect(response.body.data.overdueDeliveries[0]._id).toBe(oldOrder.id);
   expect(response.body.data.dueDeliveries[0]._id).toBe(currentOrder.id);

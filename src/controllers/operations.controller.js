@@ -129,10 +129,11 @@ async function reports(req, res) {
   const previousTo = new Date(from.getTime() - 1);
   const previousFrom = new Date(previousTo.getTime() - duration);
   const studioId = req.auth.studio._id;
-  const [periodRows, financeRows, activeRows, previousRows, previousFinanceRows] = await Promise.all([
+  const [periodRows, financeRows, activeRows, paymentDueRows, previousRows, previousFinanceRows] = await Promise.all([
     Order.find({ studioId, createdAt: { $gte: from, $lte: to }, deletedAt: null }).populate('customerId', 'name phone'),
     Order.find({ studioId, 'payments.recordedAt': { $gte: from, $lte: to }, deletedAt: null }).populate('customerId', 'name phone'),
     Order.find({ studioId, status: { $nin: ['delivered', 'cancelled'] }, deletedAt: null }).populate('customerId', 'name phone').sort({ deliveryDate: 1 }),
+    Order.find({ studioId, status: { $ne: 'cancelled' }, deletedAt: null }).populate('customerId', 'name phone').sort({ deliveryDate: 1 }),
     Order.find({ studioId, createdAt: { $gte: previousFrom, $lte: previousTo }, deletedAt: null }).select('status payments totalPaise createdAt'),
     Order.find({ studioId, 'payments.recordedAt': { $gte: previousFrom, $lte: previousTo }, deletedAt: null }).select('payments'),
   ]);
@@ -149,7 +150,7 @@ async function reports(req, res) {
   const reportOrders = periodRows.filter((order) => order.status !== 'cancelled');
   const bookedSalesPaise = reportOrders.reduce((sum, order) => sum + order.totalPaise, 0);
   const serializedActive = activeRows.map(serialize);
-  const duePayments = serializedActive.filter((order) => order.outstandingPaise > 0);
+  const duePayments = paymentDueRows.map(serialize).filter((order) => order.outstandingPaise > 0);
   const outstandingPaise = duePayments.reduce((sum, order) => sum + order.outstandingPaise, 0);
   const nextWeek = new Date(now.getTime() + 7 * 86400000);
   const overdueDeliveries = serializedActive.filter((order) => order.deliveryDate < now);
