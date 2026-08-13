@@ -447,6 +447,20 @@ test('shop onboarding persists the owner and business profile', async () => {
   });
   expect((await User.findById(verified.body.data.user.id)).name).toBe('Ramesh Kumar');
   expect((await Member.findOne({ studioId: verified.body.data.studioId })).phone).toBe('+919876543221');
+
+  const servicesUpdated = await request(app)
+    .patch('/api/v1/studio')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ services: ['mens_wear', 'kids_wear', 'alteration'] })
+    .expect(200);
+  expect(servicesUpdated.body.data.settings.garmentAudiences).toEqual(
+    expect.arrayContaining(['men', 'kids']),
+  );
+  const updatedTemplates = await request(app)
+    .get('/api/v1/garment-templates?active=true')
+    .set('Authorization', `Bearer ${token}`)
+    .expect(200);
+  expect(updatedTemplates.body.data.some((template) => template.audience === 'kids')).toBe(true);
 });
 
 test('standard garments are global while studio-created garments stay private', async () => {
