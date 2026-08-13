@@ -188,6 +188,7 @@ async function reports(req, res) {
   const completionBase = periodRows.filter((order) => order.status !== 'cancelled').length;
   const percentChange = (current, previous) => previous === 0 ? (current === 0 ? 0 : 100) : Math.round(((current - previous) / previous) * 1000) / 10;
   const topCustomers = [...customers.values()].sort((a, b) => b.valuePaise - a.valuePaise).slice(0, 5);
+  const netCollectionsPaise = collectedPaise - refundedPaise;
 
   res.json({ data: {
     from,
@@ -195,7 +196,11 @@ async function reports(req, res) {
     revenuePaise: collectedPaise,
     collectedPaise,
     refundedPaise,
-    netRevenuePaise: collectedPaise - refundedPaise,
+    netRevenuePaise: netCollectionsPaise,
+    // Compatibility for report clients that previously rendered zero when
+    // this key was absent. Costs are not tracked yet, so this is net cash,
+    // not an accounting profit calculation.
+    netProfitPaise: netCollectionsPaise,
     bookedSalesPaise,
     outstandingPaise,
     orders: periodRows.length,

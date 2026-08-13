@@ -3,6 +3,11 @@ const { Customer, Order, Measurement, GarmentTemplate } = require("../models");
 const { AppError, notFound } = require("../utils/errors");
 const { escapedSearch } = require("../utils/search");
 const workflowNotifications = require("../services/workflow-notifications.service");
+function serializeMeasurement(row) {
+  return row?.toObject
+    ? row.toObject({ flattenMaps: true })
+    : row;
+}
 const customerInput = z.object({
   name: z.string().trim().min(2).max(100),
   phone: z.string().trim().min(10).max(20),
@@ -185,7 +190,12 @@ async function measurements(req, res) {
   };
   const rows = await Measurement.find(filter).sort({ version: -1 });
   if (req.params.templateId)
-    return res.json({ data: { current: rows[0] || null, history: rows } });
+    return res.json({
+      data: {
+        current: rows[0] ? serializeMeasurement(rows[0]) : null,
+        history: rows.map(serializeMeasurement),
+      },
+    });
   const currentByTemplate = new Map();
   for (const row of rows)
     if (!currentByTemplate.has(row.templateId.toString()))
@@ -202,7 +212,7 @@ async function measurements(req, res) {
   );
   res.json({
     data: [...currentByTemplate.values()].map((row) => ({
-      ...row.toObject(),
+      ...serializeMeasurement(row),
       template: templateById.get(row.templateId.toString()),
     })),
   });
@@ -306,7 +316,10 @@ async function saveMeasurements(req, res) {
     customer.name,
     req.auth.user._id,
   );
-  res.status(201).json({ data: row, meta: { savedAsNewVersion: true } });
+  res.status(201).json({
+    data: serializeMeasurement(row),
+    meta: { savedAsNewVersion: true },
+  });
 }
 module.exports = {
   list,

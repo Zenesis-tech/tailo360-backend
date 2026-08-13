@@ -183,6 +183,7 @@ test('reports include period performance and current outstanding work', async ()
     collectedPaise: 10000,
     refundedPaise: 5000,
     netRevenuePaise: 5000,
+    netProfitPaise: 5000,
     bookedSalesPaise: 20000,
     orders: 1,
     uniqueCustomers: 1,
@@ -194,6 +195,45 @@ test('reports include period performance and current outstanding work', async ()
   );
   expect(response.body.data.overdueDeliveries[0]._id).toBe(oldOrder.id);
   expect(response.body.data.dueDeliveries[0]._id).toBe(currentOrder.id);
+});
+
+test('cash recorded through the payment endpoint appears in net collections', async () => {
+  const verified = await createAccount('+919876543239');
+  const { Customer, Order } = require('../src/models');
+  const customer = await Customer.create({
+    studioId: verified.body.data.studioId,
+    name: 'Cash Report Customer',
+    phone: '+919000000239',
+  });
+  const order = await Order.create({
+    studioId: verified.body.data.studioId,
+    customerId: customer._id,
+    code: 'RPT-CASH',
+    status: 'pending',
+    orderDate: new Date(),
+    deliveryDate: new Date(Date.now() + 86400000),
+    totalPaise: 12000,
+    lines: [{ name: 'Shirt', quantity: 1, lineTotalPaise: 12000 }],
+  });
+
+  await request(app)
+    .post('/api/v1/payments')
+    .set('Authorization', `Bearer ${verified.body.data.accessToken}`)
+    .send({ orderId: order.id, amountPaise: 7000, method: 'cash' })
+    .expect(201);
+
+  const report = await request(app)
+    .get(`/api/v1/reports?from=${encodeURIComponent(new Date(Date.now() - 86400000).toISOString())}&to=${encodeURIComponent(new Date(Date.now() + 1000).toISOString())}`)
+    .set('Authorization', `Bearer ${verified.body.data.accessToken}`)
+    .expect(200);
+
+  expect(report.body.data).toMatchObject({
+    collectedPaise: 7000,
+    refundedPaise: 0,
+    netRevenuePaise: 7000,
+    netProfitPaise: 7000,
+    paymentMethods: { cash: 7000 },
+  });
 });
 
 test('notification history tracks unread state and supports admin targeting', async () => {
@@ -437,11 +477,38 @@ test('standard garments are global while studio-created garments stay private', 
     .expect(201);
   expect(custom.body.data.scope).toBe('studio');
 
+  const globalShirt = firstList.body.data.find((row) => row.name === 'Shirt');
+  const override = await request(app)
+    .post('/api/v1/garment-templates/clone')
+    .set('Authorization', `Bearer ${first.body.data.accessToken}`)
+    .send({ templateId: globalShirt._id, name: globalShirt.name })
+    .expect(201);
+  await request(app)
+    .patch(`/api/v1/garment-templates/${override.body.data._id}`)
+    .set('Authorization', `Bearer ${first.body.data.accessToken}`)
+    .send({
+      version: override.body.data.version,
+      fields: [{ name: 'Studio Shirt Length', unit: 'in' }],
+    })
+    .expect(200);
+
+  const firstAfterOverride = await request(app)
+    .get('/api/v1/garment-templates?active=true')
+    .set('Authorization', `Bearer ${first.body.data.accessToken}`)
+    .expect(200);
+  const visibleShirts = firstAfterOverride.body.data.filter(
+    (row) => row.name === 'Shirt',
+  );
+  expect(visibleShirts).toHaveLength(1);
+  expect(visibleShirts[0]).toMatchObject({ scope: 'studio' });
+  expect(visibleShirts[0].fields[0].name).toBe('Studio Shirt Length');
+
   const secondAfter = await request(app)
     .get('/api/v1/garment-templates?active=true')
     .set('Authorization', `Bearer ${second.body.data.accessToken}`)
     .expect(200);
   expect(secondAfter.body.data.some((row) => row.name === 'Custom ceremonial coat')).toBe(false);
+  expect(secondAfter.body.data.find((row) => row.name === 'Shirt').scope).toBe('global');
 });
 
 test('garment templates persist a backend-managed measurement diagram', async () => {
@@ -502,6 +569,23 @@ test('order creation persists per-garment measurements', async () => {
     name: 'Measurement Client',
     phone: '+919000000220',
   });
+  const profileValues = Object.fromEntries(
+    kurti.fields
+      .filter((field) => field.active !== false)
+      .map((field) => [field.name, '40']),
+  );
+  const savedProfile = await request(app)
+    .put(`/api/v1/customers/${customer.id}/measurements/${kurti._id}`)
+    .set('Authorization', `Bearer ${token}`)
+    .send({ values: profileValues, customizations: {}, unit: 'in' })
+    .expect(201);
+  expect(savedProfile.body.data.values).toEqual(profileValues);
+  const currentProfiles = await request(app)
+    .get(`/api/v1/customers/${customer.id}/measurements`)
+    .set('Authorization', `Bearer ${token}`)
+    .expect(200);
+  expect(currentProfiles.body.data[0].values).toEqual(profileValues);
+
   const created = await request(app)
     .post('/api/v1/orders')
     .set('Authorization', `Bearer ${token}`)
