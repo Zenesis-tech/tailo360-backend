@@ -1,6 +1,10 @@
 const mongoose = require("mongoose");
 const { Schema, model } = mongoose;
-const base = { timestamps: true, versionKey: "version" };
+const base = {
+  timestamps: true,
+  versionKey: "version",
+  optimisticConcurrency: true,
+};
 
 const userSchema = new Schema(
   {
@@ -648,6 +652,20 @@ const appConfigSchema = new Schema(
   },
   base,
 );
+const realtimeEventSchema = new Schema(
+  {
+    studioId: { type: Schema.Types.ObjectId, required: true, index: true },
+    userIds: [{ type: Schema.Types.ObjectId, ref: "User" }],
+    resource: { type: String, required: true, index: true },
+    action: { type: String, required: true },
+    entityId: String,
+    data: Schema.Types.Mixed,
+    requestId: String,
+    expiresAt: { type: Date, required: true, index: { expires: 0 } },
+  },
+  base,
+);
+realtimeEventSchema.index({ studioId: 1, _id: 1 });
 // Administrative history is intentionally separate from application activity.  It
 // records privileged changes without retaining credentials, tokens, or raw
 // request bodies.
@@ -696,4 +714,5 @@ module.exports = {
   SupportTicket: model("SupportTicket", supportSchema),
   AppConfig: model("AppConfig", appConfigSchema),
   AuditLog: model("AuditLog", auditLogSchema),
+  RealtimeEvent: model("RealtimeEvent", realtimeEventSchema),
 };

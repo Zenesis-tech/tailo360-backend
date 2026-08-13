@@ -1,5 +1,6 @@
 const { Subscription, SubscriptionPlan, Referral, ReferralRewardConfig } = require('../models');
 const { send: sendNotification } = require('./notification.service');
+const realtimeEvents = require('./realtime-events.service');
 
 async function refreshSubscription(subscription) {
   if (!subscription) return subscription;
@@ -7,6 +8,7 @@ async function refreshSubscription(subscription) {
   if (subscription.status === 'trial' && subscription.trialEndsAt && subscription.trialEndsAt <= now) {
     subscription.status = 'expired';
     await subscription.save();
+    await realtimeEvents.publish(subscription.studioId, { resource: 'subscription', action: 'updated', id: subscription.id, data: subscription });
     sendNotification(subscription.studioId, {
       type: 'subscription_expired',
       title: 'Free trial ended',
@@ -19,6 +21,7 @@ async function refreshSubscription(subscription) {
   if (['active', 'grace_period'].includes(subscription.status) && subscription.periodEndsAt && subscription.periodEndsAt <= now) {
     subscription.status = 'restricted';
     await subscription.save();
+    await realtimeEvents.publish(subscription.studioId, { resource: 'subscription', action: 'updated', id: subscription.id, data: subscription });
     sendNotification(subscription.studioId, {
       type: 'subscription_restricted',
       title: 'Subscription needs attention',
@@ -57,6 +60,11 @@ async function rewardReferralForStudio(refereeStudioId, qualifyingCondition = 'f
       referrerSubscription.referralCreditPaise = (referrerSubscription.referralCreditPaise || 0) + referral.reward.value * 100;
     }
     await referrerSubscription.save();
+    await realtimeEvents.publish(referral.referrerStudioId, { resource: 'subscription', action: 'updated', id: referrerSubscription.id, data: referrerSubscription });
+    await Promise.all([
+      realtimeEvents.publish(referral.referrerStudioId, { resource: 'referral', action: 'updated', id: referral.id, data: referral }),
+      realtimeEvents.publish(referral.refereeStudioId, { resource: 'referral', action: 'updated', id: referral.id, data: referral }),
+    ]);
     sendNotification(referral.referrerStudioId, {
       type: 'referral_rewarded',
       title: 'Referral reward earned',

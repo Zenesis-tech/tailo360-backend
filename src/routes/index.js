@@ -13,7 +13,6 @@ const auth = wrapController(require("../controllers/auth.controller"));
 const customers = wrapController(require("../controllers/customer.controller"));
 const templates = wrapController(require("../controllers/template.controller"));
 const orderController = require("../controllers/order.controller");
-const realtimeEvents = require('../services/realtime-events.service');
 const orders = wrapController(orderController);
 const operationsController = require("../controllers/operations.controller");
 const ops = wrapController(operationsController);
@@ -39,9 +38,6 @@ router.post("/auth/admin/login", auth.adminLogin);
 router.post("/auth/refresh", auth.refresh);
 router.post("/auth/logout", auth.logout);
 router.get("/auth/me", authenticate, auth.me);
-router.get('/events', authenticate, (req, res) => {
-  realtimeEvents.connect(req.auth.studio._id, res);
-});
 router.get("/dashboard", authenticate, ops.dashboard);
 router.get("/calendar", authenticate, ops.schedule);
 router.post("/devices", authenticate, notifications.register);

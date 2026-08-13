@@ -23,6 +23,24 @@ const {
 } = require("../models");
 const { AppError, notFound } = require("../utils/errors");
 const { hashPassword } = require("../services/password.service");
+const realtimeEvents = require("../services/realtime-events.service");
+
+async function publishTemplateChange(template, action = "updated") {
+  const studioIds = template.scope === "global"
+    ? (await Studio.find().select("_id")).map((studio) => studio._id)
+    : [template.studioId];
+  const data = action === "deleted"
+    ? { _id: template.id, deletedAt: new Date().toISOString() }
+    : template;
+  await Promise.all(studioIds.filter(Boolean).map((studioId) =>
+    realtimeEvents.publish(studioId, {
+      resource: "garment-templates",
+      action,
+      id: template.id,
+      data,
+    }),
+  ));
+}
 const { auditAdmin } = require("../services/audit.service");
 const { send: sendNotification } = require("../services/notification.service");
 const { escapedSearch } = require("../utils/search");
@@ -384,6 +402,12 @@ async function updateSubscription(req, res) {
     source: "admin",
     createdBy: req.auth.user._id,
   }).catch(console.error);
+  await realtimeEvents.publish(row.studioId, {
+    resource: "subscription",
+    action: "updated",
+    id: row.id,
+    data: row,
+  });
   res.json({ data: row });
 }
 async function grantTestSubscription(req, res) {
@@ -447,6 +471,12 @@ async function grantTestSubscription(req, res) {
     createdBy: req.auth.user._id,
     dedupeKey: `admin-grant:${subscription.id}:${subscription.adminGrant.grantedAt.toISOString()}`,
   }).catch(console.error);
+  await realtimeEvents.publish(subscription.studioId, {
+    resource: "subscription",
+    action: "updated",
+    id: subscription.id,
+    data: subscription,
+  });
   res.json({ data: subscription });
 }
 async function orders(req, res) {
@@ -541,6 +571,7 @@ async function createTemplate(req, res) {
     undefined,
     row,
   );
+  await publishTemplateChange(row, "created");
   res.status(201).json({ data: (await withDiagramUrls([row]))[0] });
 }
 async function updateTemplate(req, res) {
@@ -570,6 +601,7 @@ async function updateTemplate(req, res) {
     before,
     row,
   );
+  await publishTemplateChange(row);
   res.json({ data: (await withDiagramUrls([row]))[0] });
 }
 
@@ -628,6 +660,7 @@ async function deleteTemplate(req, res) {
       await media.save();
     }),
   );
+  await publishTemplateChange(row, "deleted");
   res.json({ data: { id: String(row._id), name: row.name, deleted: true } });
 }
 
@@ -720,6 +753,7 @@ async function completeTemplateDiagramUpload(req, res) {
     { measurementDiagramMediaId: oldMediaId },
     { measurementDiagramMediaId: media._id },
   );
+  await publishTemplateChange(template);
   res.json({ data: (await withDiagramUrls([template]))[0] });
 }
 function imageMatchesContentType(buffer, contentType) {
@@ -773,6 +807,7 @@ async function uploadTemplateDiagram(req, res) {
     }
   }
   await auditAdmin(req, "garment_template.diagram_updated", "garment_template", template, { measurementDiagramMediaId: oldMediaId }, { measurementDiagramMediaId: media._id });
+  await publishTemplateChange(template);
   res.json({ data: (await withDiagramUrls([template]))[0] });
 }
 async function deleteTemplateDiagram(req, res) {
@@ -802,6 +837,7 @@ async function deleteTemplateDiagram(req, res) {
     { measurementDiagramMediaId: oldMediaId },
     { measurementDiagramMediaId: null },
   );
+  await publishTemplateChange(template);
   res.json({ data: (await withDiagramUrls([template]))[0] });
 }
 async function uploadTemplateIcon(req, res) {
@@ -835,6 +871,7 @@ async function uploadTemplateIcon(req, res) {
     }
   }
   await auditAdmin(req, "garment_template.icon_updated", "garment_template", template, { garmentIconMediaId: oldMediaId }, { garmentIconMediaId: media._id });
+  await publishTemplateChange(template);
   res.json({ data: (await withDiagramUrls([template]))[0] });
 }
 async function deleteTemplateIcon(req, res) {
@@ -853,6 +890,7 @@ async function deleteTemplateIcon(req, res) {
   template.garmentIconUrl = "";
   await template.save();
   await auditAdmin(req, "garment_template.icon_deleted", "garment_template", template, { garmentIconMediaId: oldMediaId }, { garmentIconMediaId: null });
+  await publishTemplateChange(template);
   res.json({ data: (await withDiagramUrls([template]))[0] });
 }
 async function prices(req, res) {

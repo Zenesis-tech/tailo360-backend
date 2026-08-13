@@ -108,19 +108,44 @@ app.use("/api/v1", (req, res, next) => {
   if (databaseStatus().ready) return next();
   return connectDatabase().then(() => next()).catch(next);
 });
-app.use('/api/v1', (req, res, next) => {
-  res.on('finish', () => {
-    if (
-      req.auth?.studio?._id &&
-      !['GET', 'HEAD', 'OPTIONS'].includes(req.method) &&
-      res.statusCode >= 200 &&
-      res.statusCode < 300
-    ) {
-      realtimeEvents.publish(req.auth.studio._id, {
-        method: req.method,
-        resource: req.path.split('/').filter(Boolean)[0] || 'data',
-      });
-    }
+const realtimeExcludedResources = new Set(["auth", "devices", "media", "admin"]);
+
+function realtimeDescriptor(req, responseBody, statusCode) {
+  const parts = req.path.split("/").filter(Boolean);
+  let resource = parts[0] || "data";
+  if (resource === "customers" && parts.includes("measurements")) resource = "measurements";
+  if (resource === "orders" && parts.includes("invoice")) return null;
+  if (realtimeExcludedResources.has(resource)) return null;
+  let action = req.method === "DELETE" || statusCode === 204 ? "deleted" : "updated";
+  if (req.method === "POST" && parts.length === 1) action = "created";
+  if (resource === "payments") action = "created";
+  const data = responseBody?.data ?? null;
+  return {
+    resource,
+    action,
+    id: data?._id || data?.id || req.params?.id || req.params?.templateId || parts[1],
+    data: data || (action === "deleted" ? { _id: req.params?.id || parts[1], deletedAt: new Date().toISOString() } : null),
+    requestId: req.id,
+  };
+}
+
+app.use("/api/v1", (req, res, next) => {
+  let responseBody;
+  const sendJson = res.json.bind(res);
+  res.json = (body) => {
+    responseBody = body;
+    return sendJson(body);
+  };
+  res.on("finish", () => {
+    if (!req.auth?.studio?._id || ["GET", "HEAD", "OPTIONS"].includes(req.method) || res.statusCode < 200 || res.statusCode >= 300) return;
+    const descriptor = realtimeDescriptor(req, responseBody, res.statusCode);
+    if (!descriptor) return;
+    const options = descriptor.resource === "notifications"
+      ? { userIds: [req.auth.user._id] }
+      : undefined;
+    realtimeEvents.publish(req.auth.studio._id, descriptor, options).catch((error) => {
+      console.error("Realtime event could not be persisted", safeError(error));
+    });
   });
   next();
 }, routes);

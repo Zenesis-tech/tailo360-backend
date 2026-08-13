@@ -171,12 +171,14 @@ async function send(studioId, message) {
     )
   ).filter(Boolean);
   await Promise.all(notifications.map(deliver));
-  if (notifications.length) {
+  await Promise.all(notifications.map((notification) =>
     realtimeEvents.publish(studioId, {
-      method: "POST",
       resource: "notifications",
-    });
-  }
+      action: "created",
+      id: notification.id,
+      data: notification,
+    }, { userIds: [notification.userId] }),
+  ));
   return notifications;
 }
 
