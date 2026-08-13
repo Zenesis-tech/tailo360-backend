@@ -82,13 +82,14 @@ function pdfFor(report, meta) {
       ["ORDERS", report.orders, ink], ["AVG. ORDER", money(report.averageOrderPaise), orange],
       ["OUTSTANDING", money(report.outstandingPaise), orange], ["COMPLETION", `${report.completionRate}%`, green],
     ];
+    const cardsY = doc.y;
     cards.forEach((card, index) => {
-      const column = index % 3, row = Math.floor(index / 3), x = left + column * 173, y = doc.y + row * 57;
+      const column = index % 3, row = Math.floor(index / 3), x = left + column * 173, y = cardsY + row * 57;
       doc.roundedRect(x, y, 162, 47, 7).fill(soft);
       doc.fillColor(muted).font("Helvetica-Bold").fontSize(6.5).text(card[0], x + 10, y + 9, { characterSpacing: .5 });
       doc.fillColor(card[2]).fontSize(12).text(String(card[1]), x + 10, y + 23, { width: 142, ellipsis: true });
     });
-    doc.y += 120;
+    doc.y = cardsY + 120;
 
     const daily = report.daily || [];
     if (daily.length) {
@@ -127,9 +128,20 @@ function pdfFor(report, meta) {
     const range = doc.bufferedPageRange();
     for (let index = range.start; index < range.start + range.count; index++) {
       doc.switchToPage(index);
+      doc.page.margins.bottom = 0;
       doc.moveTo(left, 796).lineTo(left + width, 796).strokeColor(border).lineWidth(.5).stroke();
-      doc.fillColor(muted).font("Helvetica").fontSize(7).text("Tailo360 business report", left, 806, { width: 250 });
-      doc.text(`Page ${index + 1} of ${range.count}`, 400, 806, { width: 153, align: "right" });
+      // Footer text must not participate in PDFKit's flowing layout. The
+      // footer sits below the normal content margin; flowing text here causes
+      // PDFKit to append a blank page for every text call.
+      doc.fillColor(muted).font("Helvetica").fontSize(7).text("Tailo360 business report", left, 806, {
+        width: 250,
+        lineBreak: false,
+      });
+      doc.text(`Page ${index + 1} of ${range.count}`, 400, 806, {
+        width: 153,
+        align: "right",
+        lineBreak: false,
+      });
     }
     doc.end();
   });

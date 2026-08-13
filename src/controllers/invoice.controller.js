@@ -141,6 +141,10 @@ function pdfFor(order, studio, { studioLogo, tailoLogo, owner } = {}) {
       doc.fillColor(ink).font('Helvetica').fontSize(8.5)
         .text(order.notes, left, noteY + 15, { width: 260, height: 42, ellipsis: true });
     }
+    // The remaining elements are fixed-position footer content. Removing the
+    // flow margin here prevents PDFKit from interpreting those coordinates as
+    // overflow and appending pages.
+    doc.page.margins.bottom = 0;
     const configuredFooter = studio.settings?.invoice?.footer?.trim();
     doc.fillColor(ink).font('Helvetica-Bold').fontSize(10)
       .text(configuredFooter || 'Thank you for choosing us.', left, 729, { width, align: 'center' });
@@ -150,11 +154,20 @@ function pdfFor(order, studio, { studioLogo, tailoLogo, owner } = {}) {
     doc.moveTo(left, 779).lineTo(right, 779).lineWidth(.7).strokeColor(border).stroke();
     const tailoDrawn = safeImage(doc, tailoLogo, left, 791, { fit: [28, 24], align: 'center', valign: 'center' });
     const brandX = tailoDrawn ? left + 35 : left;
-    doc.fillColor(muted).font('Helvetica').fontSize(7.5).text('Powered by', brandX, 797);
-    doc.fillColor(purple).font('Helvetica-Bold').fontSize(9).text('Tailo', brandX + 40, 795);
-    doc.fillColor(orange).text('360', brandX + 61, 795);
+    // These elements are deliberately inside the page footer, below the
+    // normal content margin. Keep them out of PDFKit's flowing layout or each
+    // text call can create a trailing blank page.
     doc.fillColor(muted).font('Helvetica').fontSize(7.5)
-      .text('Professional studio management', 390, 797, { width: 159, align: 'right' });
+      .text('Powered by', brandX, 797, { lineBreak: false });
+    doc.fillColor(purple).font('Helvetica-Bold').fontSize(9)
+      .text('Tailo', brandX + 40, 795, { lineBreak: false });
+    doc.fillColor(orange).text('360', brandX + 61, 795, { lineBreak: false });
+    doc.fillColor(muted).font('Helvetica').fontSize(7.5)
+      .text('Professional studio management', 390, 797, {
+        width: 159,
+        align: 'right',
+        lineBreak: false,
+      });
     doc.end();
   });
 }

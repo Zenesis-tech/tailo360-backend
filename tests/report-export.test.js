@@ -1,6 +1,10 @@
 const ExcelJS = require("exceljs");
 const { pdfFor, xlsxFor, csvFor } = require("../src/controllers/report-export.controller");
 
+const pageCount = (buffer) => (
+  buffer.toString("latin1").match(/\/Type\s*\/Page\b/g) || []
+).length;
+
 const meta = {
   studioName: "Needle & Thread",
   address: "Pune, Maharashtra",
@@ -48,6 +52,8 @@ test("business PDF is a paginated professional PDF", async () => {
   const buffer = await pdfFor(report(75), meta);
   expect(buffer.subarray(0, 4).toString()).toBe("%PDF");
   expect(buffer.length).toBeGreaterThan(5000);
+  expect(pageCount(buffer)).toBeGreaterThan(1);
+  expect(pageCount(buffer)).toBeLessThan(20);
 });
 
 test("business XLSX opens with structured sheets and totals", async () => {
@@ -72,7 +78,9 @@ test("CSV is UTF-8, escaped, and contains authoritative detail", () => {
 
 test("all formats support an empty-data report", async () => {
   const empty = report(0);
-  expect((await pdfFor(empty, meta)).subarray(0, 4).toString()).toBe("%PDF");
+  const pdf = await pdfFor(empty, meta);
+  expect(pdf.subarray(0, 4).toString()).toBe("%PDF");
+  expect(pageCount(pdf)).toBe(1);
   expect((await xlsxFor(empty, meta)).length).toBeGreaterThan(1000);
   expect(csvFor(empty, meta).toString("utf8")).toContain("Orders,0");
 });

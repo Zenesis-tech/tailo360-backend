@@ -2,6 +2,10 @@ const fs = require('fs');
 const path = require('path');
 const { pdfFor } = require('../src/controllers/invoice.controller');
 
+const pageCount = (buffer) => (
+  buffer.toString('latin1').match(/\/Type\s*\/Page\b/g) || []
+).length;
+
 test('renders a branded studio invoice with logo assets', async () => {
   const logo = fs.readFileSync(path.resolve(__dirname, '../../assets/svg/logo.png'));
   const buffer = await pdfFor(
@@ -36,6 +40,7 @@ test('renders a branded studio invoice with logo assets', async () => {
 
   expect(buffer.subarray(0, 4).toString()).toBe('%PDF');
   expect(buffer.length).toBeGreaterThan(5000);
+  expect(pageCount(buffer)).toBe(1);
 });
 
 test('renders when no studio logo is configured', async () => {
@@ -54,4 +59,5 @@ test('renders when no studio logo is configured', async () => {
   );
 
   expect(buffer.subarray(0, 4).toString()).toBe('%PDF');
+  expect(pageCount(buffer)).toBe(1);
 });
