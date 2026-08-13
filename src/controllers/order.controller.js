@@ -20,6 +20,7 @@ const orderInput = z.object({
   reminderDate: z.coerce.date().optional(),
   trialDate: z.coerce.date().nullable().optional(),
   deliveryDate: z.coerce.date(),
+  priority: z.enum(["normal", "high", "urgent"]).default("normal"),
   notes: z.string().max(5000).optional(),
   voiceMedia: z.string().optional(),
   referenceMedia: z.array(z.string()).max(20).default([]),
@@ -46,6 +47,12 @@ function serialize(order) {
     paidPaise,
     outstandingPaise: object.totalPaise - paidPaise,
   };
+}
+async function serializePopulated(order) {
+  if (order.populate && !order.populated("customerId")) {
+    await order.populate("customerId", "name phone address");
+  }
+  return serialize(order);
 }
 async function create(req, res) {
   const body = orderInput.parse(req.body),
@@ -129,6 +136,7 @@ async function create(req, res) {
     reminderDate: body.reminderDate,
     trialDate: body.trialDate,
     deliveryDate: body.deliveryDate,
+    priority: body.priority,
     notes: body.notes,
     voiceMedia: body.voiceMedia,
     referenceMedia: body.referenceMedia,
@@ -149,7 +157,7 @@ async function create(req, res) {
     activity: [{ type: "created", actorId: req.auth.user._id }],
   });
   workflowNotifications.orderCreated(order, customer, req.auth.user._id);
-  res.status(201).json({ data: serialize(order) });
+  res.status(201).json({ data: await serializePopulated(order) });
 }
 async function list(req, res) {
   const page = Math.max(1, Number(req.query.page) || 1),
@@ -175,7 +183,7 @@ async function list(req, res) {
   const [rows, total] = await Promise.all([
     Order.find(filter)
       .populate("customerId", "name phone")
-      .sort({ deliveryDate: 1, createdAt: -1 })
+      .sort({ createdAt: -1, _id: -1 })
       .skip((page - 1) * limit)
       .limit(limit),
     Order.countDocuments(filter),
@@ -189,7 +197,7 @@ async function get(req, res) {
     deletedAt: null,
   }).populate("customerId");
   if (!order) throw notFound("Order");
-  res.json({ data: serialize(order) });
+  res.json({ data: await serializePopulated(order) });
 }
 async function update(req, res) {
   const body = z
@@ -199,6 +207,7 @@ async function update(req, res) {
       reminderDate: z.coerce.date().nullable().optional(),
       trialDate: z.coerce.date().nullable().optional(),
       deliveryDate: z.coerce.date().optional(),
+      priority: z.enum(["normal", "high", "urgent"]).optional(),
       notes: z.string().max(5000).nullable().optional(),
       voiceMedia: z.string().nullable().optional(),
       referenceMedia: z.array(z.string()).max(20).optional(),
@@ -233,7 +242,7 @@ async function update(req, res) {
   order.activity.push({ type: "edited", actorId: req.auth.user._id });
   await order.save();
   workflowNotifications.orderUpdated(order, req.auth.user._id);
-  res.json({ data: serialize(order) });
+  res.json({ data: await serializePopulated(order) });
 }
 async function changeStatus(req, res) {
   const body = z
@@ -286,7 +295,7 @@ async function changeStatus(req, res) {
     previous,
     req.auth.user._id,
   );
-  res.json({ data: serialize(order) });
+  res.json({ data: await serializePopulated(order) });
 }
 async function cancel(req, res) {
   const body = z
@@ -341,7 +350,7 @@ async function cancel(req, res) {
     previous,
     req.auth.user._id,
   );
-  res.json({ data: serialize(order) });
+  res.json({ data: await serializePopulated(order) });
 }
 async function handover(req, res) {
   const body = z
@@ -417,7 +426,7 @@ async function handover(req, res) {
       req.auth.user._id,
     );
   }
-  res.json({ data: serialize(order) });
+  res.json({ data: await serializePopulated(order) });
 }
 async function activity(req, res) {
   const order = await Order.findOne({
@@ -437,4 +446,5 @@ module.exports = {
   handover,
   activity,
   serialize,
+  serializePopulated,
 };

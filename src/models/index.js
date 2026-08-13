@@ -320,6 +320,11 @@ const orderSchema = new Schema(
     reminderDate: Date,
     trialDate: Date,
     deliveryDate: { type: Date, required: true },
+    priority: {
+      type: String,
+      enum: ["normal", "high", "urgent"],
+      default: "normal",
+    },
     notes: String,
     voiceMedia: String,
     referenceMedia: [String],

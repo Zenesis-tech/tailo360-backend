@@ -231,11 +231,15 @@ test('cash recorded through the payment endpoint appears in net collections', as
     lines: [{ name: 'Shirt', quantity: 1, lineTotalPaise: 12000 }],
   });
 
-  await request(app)
+  const paymentResponse = await request(app)
     .post('/api/v1/payments')
     .set('Authorization', `Bearer ${verified.body.data.accessToken}`)
     .send({ orderId: order.id, amountPaise: 7000, method: 'cash' })
     .expect(201);
+  expect(paymentResponse.body.data.customerId).toMatchObject({
+    name: 'Cash Report Customer',
+    phone: '+919000000239',
+  });
 
   const report = await request(app)
     .get(`/api/v1/reports?from=${encodeURIComponent(new Date(Date.now() - 86400000).toISOString())}&to=${encodeURIComponent(new Date(Date.now() + 1000).toISOString())}`)
@@ -621,6 +625,7 @@ test('order creation persists per-garment measurements', async () => {
     .send({
       customerId: customer.id,
       deliveryDate: new Date(Date.now() + 86400000).toISOString(),
+      priority: 'urgent',
       lines: [{
         templateId: kurti._id,
         quantity: 1,
@@ -635,6 +640,7 @@ test('order creation persists per-garment measurements', async () => {
   const stored = await Order.findById(created.body.data._id);
   expect(stored.lines[0].measurements.get('Chest')).toBe('40');
   expect(stored.lines[0].measurements.get('Length')).toBe('44');
+  expect(stored.priority).toBe('urgent');
 
   const detail = await request(app)
     .get(`/api/v1/orders/${created.body.data._id}`)
@@ -645,6 +651,35 @@ test('order creation persists per-garment measurements', async () => {
     Length: '44',
     Waist: '36',
   });
+  expect(detail.body.data.priority).toBe('urgent');
+
+  await Order.updateOne(
+    { _id: stored._id },
+    { createdAt: new Date(Date.now() - 86400000) },
+  );
+  const newer = await Order.create({
+    studioId: verified.body.data.studioId,
+    customerId: customer.id,
+    code: 'LATEST-ORDER',
+    status: 'pending',
+    orderDate: new Date(),
+    deliveryDate: new Date(Date.now() + 2 * 86400000),
+    priority: 'high',
+    totalPaise: 180000,
+    lines: [{
+      templateId: kurti._id,
+      name: 'Kurti',
+      quantity: 1,
+      unitPricePaise: 180000,
+      lineTotalPaise: 180000,
+      measurements: { Chest: '40' },
+    }],
+  });
+  const latestFirst = await request(app)
+    .get('/api/v1/orders')
+    .set('Authorization', `Bearer ${token}`)
+    .expect(200);
+  expect(latestFirst.body.data[0]._id).toBe(newer.id);
 });
 
 test('subscription products are filtered for the requesting store', async () => {
