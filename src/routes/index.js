@@ -18,6 +18,7 @@ const operationsController = require("../controllers/operations.controller");
 const ops = wrapController(operationsController);
 const media = wrapController(require("../controllers/media.controller"));
 const invoices = wrapController(require("../controllers/invoice.controller"));
+const reportExports = wrapController(require("../controllers/report-export.controller"));
 const notifications = wrapController(require("../controllers/notification.controller"));
 const webhooks = wrapController(require("../controllers/store-webhook.controller"));
 const sync = wrapController(require("../controllers/sync.controller"));
@@ -47,7 +48,13 @@ router.get("/notifications/unread-count", authenticate, notifications.unreadCoun
 router.patch("/notifications/:id/read", authenticate, notifications.markRead);
 router.post("/notifications/read-all", authenticate, notifications.markAllRead);
 router.get("/sync/changes", authenticate, sync.changes);
-router.get("/reports", authenticate, ops.reports);
+router.get("/reports", authenticate, authorize("reports:read"), ops.reports);
+router.get(
+  "/reports/export",
+  authenticate,
+  authorize("reports:read"),
+  reportExports.exportReport,
+);
 router.get("/studio", authenticate, ops.studio);
 router.patch(
   "/studio",

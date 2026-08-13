@@ -212,6 +212,47 @@ test('reports include period performance and current outstanding work', async ()
   expect(response.body.data.dueDeliveries[0]._id).toBe(currentOrder.id);
 });
 
+test('business report exports require report permission and validate ranges', async () => {
+  const verified = await createAccount('+919876543235');
+  const from = new Date(Date.now() - 7 * 86400000).toISOString();
+  const to = new Date().toISOString();
+  const token = verified.body.data.accessToken;
+
+  for (const [format, type] of [
+    ['pdf', 'application/pdf'],
+    ['xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+    ['csv', 'text/csv'],
+  ]) {
+    const response = await request(app)
+      .get(`/api/v1/reports/export?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&format=${format}`)
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+    expect(response.headers['content-type']).toContain(type);
+    expect(response.headers['content-disposition']).toContain(`.${format}`);
+  }
+
+  const invalid = await request(app)
+    .get(`/api/v1/reports/export?from=${encodeURIComponent(to)}&to=${encodeURIComponent(from)}&format=pdf`)
+    .set('Authorization', `Bearer ${token}`)
+    .expect(422);
+  expect(invalid.body.error.code).toBe('INVALID_REPORT_RANGE');
+
+  const { User, Member } = require('../src/models');
+  const user = await User.create({ phone: '+919000000235' });
+  const member = await Member.create({
+    studioId: verified.body.data.studioId,
+    userId: user._id,
+    phone: user.phone,
+    role: 'master_tailor',
+  });
+  const session = await require('../src/services/auth.service').issueSession(user, member);
+  const forbidden = await request(app)
+    .get(`/api/v1/reports/export?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&format=pdf`)
+    .set('Authorization', `Bearer ${session.accessToken}`)
+    .expect(403);
+  expect(forbidden.body.error.code).toBe('FORBIDDEN');
+});
+
 test('cash recorded through the payment endpoint appears in net collections', async () => {
   const verified = await createAccount('+919876543239');
   const { Customer, Order } = require('../src/models');

@@ -114,11 +114,11 @@ async function dashboard(req, res) {
     },
   });
 }
-async function reports(req, res) {
+async function buildBusinessReport(auth, query, { includeDetails = false } = {}) {
   const range = z.object({
     from: z.coerce.date().optional(),
     to: z.coerce.date().optional(),
-  }).parse(req.query);
+  }).parse(query);
   const now = new Date();
   const from = range.from || new Date(now.getFullYear(), now.getMonth(), 1);
   const to = range.to || now;
@@ -128,7 +128,7 @@ async function reports(req, res) {
   const duration = to - from;
   const previousTo = new Date(from.getTime() - 1);
   const previousFrom = new Date(previousTo.getTime() - duration);
-  const studioId = req.auth.studio._id;
+  const studioId = auth.studio._id;
   const [periodRows, financeRows, activeRows, paymentDueRows, previousRows, previousFinanceRows] = await Promise.all([
     Order.find({ studioId, createdAt: { $gte: from, $lte: to }, deletedAt: null }).populate('customerId', 'name phone'),
     Order.find({ studioId, 'payments.recordedAt': { $gte: from, $lte: to }, deletedAt: null }).populate('customerId', 'name phone'),
@@ -204,7 +204,7 @@ async function reports(req, res) {
   const topCustomers = [...customers.values()].sort((a, b) => b.valuePaise - a.valuePaise).slice(0, 5);
   const netCollectionsPaise = collectedPaise - refundedPaise;
 
-  res.json({ data: {
+  const report = {
     from,
     to,
     revenuePaise: collectedPaise,
@@ -234,7 +234,26 @@ async function reports(req, res) {
       revenuePercent: percentChange(collectedPaise - refundedPaise, previousCollected),
       ordersPercent: percentChange(periodRows.length, previousRows.length),
     },
-  } });
+  };
+  if (includeDetails) {
+    report.orderRows = periodRows.map((order) => serialize(order));
+    report.paymentRows = paymentRows.map(({ payment, order }) => ({
+      orderId: order.id,
+      orderCode: order.code,
+      customerName: order.customerId?.name || 'Customer',
+      customerPhone: order.customerId?.phone || '',
+      amountPaise: payment.amountPaise,
+      direction: payment.direction,
+      method: payment.method,
+      noteType: payment.noteType,
+      note: payment.note || '',
+      recordedAt: payment.recordedAt,
+    }));
+  }
+  return report;
+}
+async function reports(req, res) {
+  res.json({ data: await buildBusinessReport(req.auth, req.query) });
 }
 async function referral(req, res) {
   await expireReferrals();
@@ -299,4 +318,4 @@ async function schedule(req, res) { const from = req.query.from ? new Date(req.q
 const rewardConfigInput = z.object({ qualifyingCondition: z.enum(['signup_complete', 'first_paid_subscription']), reward: z.object({ type: z.enum(['trial_extension_days', 'account_credit']), value: z.number().int().positive() }), expiryDays: z.number().int().min(1).max(365), active: z.boolean().optional() });
 async function adminReferralConfigs(req, res) { res.json({ data: await ReferralRewardConfig.find().sort({ version: -1 }) }); }
 async function adminCreateReferralConfig(req, res) { const input = rewardConfigInput.parse(req.body); if (input.active ?? true) await ReferralRewardConfig.updateMany({ active: true }, { active: false }); const latest = await ReferralRewardConfig.findOne().sort({ version: -1 }); const config = await ReferralRewardConfig.create({ ...input, active: input.active ?? true, version: (latest?.version || 0) + 1 }); res.status(201).json({ data: config }); }
-module.exports = { recordPayment, duePayments, studio, updateStudio, members, dashboard, reports, referral, redeemReferral, schedule, adminReferralConfigs, adminCreateReferralConfig };
+module.exports = { recordPayment, duePayments, studio, updateStudio, members, dashboard, reports, buildBusinessReport, referral, redeemReferral, schedule, adminReferralConfigs, adminCreateReferralConfig };
