@@ -89,17 +89,19 @@ async function create(req, res) {
     });
 }
 async function get(req, res) {
-  const customer = await Customer.findOne({
-    _id: req.params.id,
-    studioId: req.auth.studio._id,
-    deletedAt: null,
-  });
+  const [customer, orders] = await Promise.all([
+    Customer.findOne({
+      _id: req.params.id,
+      studioId: req.auth.studio._id,
+      deletedAt: null,
+    }),
+    Order.find({
+      customerId: req.params.id,
+      studioId: req.auth.studio._id,
+      deletedAt: null,
+    }).sort({ createdAt: -1 }),
+  ]);
   if (!customer) throw notFound("Customer");
-  const orders = await Order.find({
-    customerId: customer._id,
-    studioId: req.auth.studio._id,
-    deletedAt: null,
-  }).sort({ createdAt: -1 });
   const outstandingPaise = orders.reduce(
     (total, order) =>
       total +
