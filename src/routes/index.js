@@ -38,6 +38,7 @@ router.post("/auth/otp/request", auth.requestOtp);
 router.post("/auth/otp/verify", auth.verifyOtp);
 router.post("/auth/google", auth.google);
 router.post("/auth/admin/login", auth.adminLogin);
+router.patch("/users/me/preferences", authenticate, auth.updatePreferences);
 router.post("/auth/refresh", auth.refresh);
 router.post("/auth/logout", auth.logout);
 router.get("/auth/me", authenticate, auth.me);

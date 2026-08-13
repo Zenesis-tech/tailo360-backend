@@ -17,7 +17,7 @@ async function verifyOtp(req, res) {
   let user = await User.findOne({ phone: body.phone }); let isNew = false; let member; let studio;
   if (!user) { user = await User.create({ phone: body.phone }); ({ studio, owner: member } = await createStudioFor(user, body)); isNew = true; } else { member = await Member.findOne({ userId: user._id, status: { $in: ['active', 'limited'] } }); if (!member) throw new AppError(403, 'NO_ACTIVE_STUDIO', 'This account has no active studio membership.'); studio = await Studio.findById(member.studioId); }
   const needsOnboarding = isNew || (!studio.onboardingCompletedAt && studio.name === 'My Studio');
-  const tokens = await issueSession(user, member); res.json({ data: { ...tokens, isNew, needsOnboarding, user: { id: user.id, phone: user.phone, name: user.name }, studioId: member.studioId, role: member.role } });
+  const tokens = await issueSession(user, member); res.json({ data: { ...tokens, isNew, needsOnboarding, user: { id: user.id, phone: user.phone, name: user.name, language: user.language }, studioId: member.studioId, role: member.role } });
 }
 async function google(req, res) {
   if (!env.GOOGLE_CLIENT_IDS.length) throw new AppError(503, 'GOOGLE_AUTH_NOT_CONFIGURED', 'Google sign-in is not configured.');
@@ -33,7 +33,7 @@ async function google(req, res) {
   let user = await User.findOne({ googleSubject: profile.sub }); let isNew = false; let member; let studio;
   if (!user) { user = await User.create({ googleSubject: profile.sub, email: profile.email.toLowerCase(), name: profile.name || profile.email }); ({ studio, owner: member } = await createStudioFor(user, { studioName: idToken.studioName })); isNew = true; } else { member = await Member.findOne({ userId: user._id, status: { $in: ['active', 'limited'] } }); if (!member) throw new AppError(403, 'NO_ACTIVE_STUDIO', 'This account has no active studio membership.'); studio = await Studio.findById(member.studioId); }
   const needsOnboarding = isNew || (!studio.onboardingCompletedAt && studio.name === 'My Studio');
-  const tokens = await issueSession(user, member); res.json({ data: { ...tokens, isNew, needsOnboarding, user: { id: user.id, email: user.email, name: user.name }, studioId: member.studioId, role: member.role } });
+  const tokens = await issueSession(user, member); res.json({ data: { ...tokens, isNew, needsOnboarding, user: { id: user.id, email: user.email, name: user.name, language: user.language }, studioId: member.studioId, role: member.role } });
 }
 async function adminLogin(req, res) { const input = z.object({ email: z.string().trim().email().max(254), password: z.string().min(10).max(200) }).parse(req.body); const user = await User.findOne({ email: input.email.toLowerCase(), deletedAt: null }).select('+passwordHash'); if (!user || user.platformRole !== 'admin' || !verifyPassword(input.password, user.passwordHash)) throw new AppError(401, 'INVALID_ADMIN_CREDENTIALS', 'Email or password is incorrect.'); const member = await Member.findOne({ userId: user._id, status: { $in: ['active', 'limited'] } }); if (!member) throw new AppError(403, 'NO_ACTIVE_STUDIO', 'This account has no active studio membership.'); const tokens = await issueSession(user, member); res.json({ data: { ...tokens, user: { id: user.id, email: user.email, name: user.name, platformRole: user.platformRole } } }); }
 async function refresh(req, res) {
@@ -58,5 +58,11 @@ async function refresh(req, res) {
   res.json({ data: tokens });
 }
 async function logout(req, res) { const token = req.body.refreshToken; if (token) { try { const payload = jwt.verify(token, env.JWT_REFRESH_SECRET); await Session.updateOne({ tokenId: payload.tokenId }, { revokedAt: new Date() }); } catch (_) {} } res.status(204).send(); }
-function me(req, res) { const { user, member, studio, subscription } = req.auth; res.json({ data: { user: { id: user.id, phone: user.phone, email: user.email, name: user.name, platformRole: user.platformRole }, membership: { id: member.id, role: member.role, status: member.status }, studio, subscription } }); }
-module.exports = { requestOtp, verifyOtp, google, adminLogin, refresh, logout, me };
+function me(req, res) { const { user, member, studio, subscription } = req.auth; res.json({ data: { user: { id: user.id, phone: user.phone, email: user.email, name: user.name, platformRole: user.platformRole, language: user.language }, membership: { id: member.id, role: member.role, status: member.status }, studio, subscription } }); }
+async function updatePreferences(req, res) {
+  const input = z.object({ language: z.enum(['en', 'hi', 'gu', 'mr']) }).parse(req.body);
+  req.auth.user.language = input.language;
+  await req.auth.user.save();
+  res.json({ data: { language: req.auth.user.language } });
+}
+module.exports = { requestOtp, verifyOtp, google, adminLogin, refresh, logout, me, updatePreferences };

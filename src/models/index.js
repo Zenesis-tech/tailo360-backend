@@ -18,6 +18,7 @@ const userSchema = new Schema(
       enum: ["user", "admin", "support"],
       default: "user",
     },
+    language: { type: String, enum: ["en", "hi", "gu", "mr"], default: "en" },
     deletedAt: Date,
   },
   base,

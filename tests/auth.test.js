@@ -63,6 +63,42 @@ test('OTP provisions a studio and returns a usable token', async () => {
   expect(new Date(profile.body.data.subscription.trialEndsAt).getTime()).toBeGreaterThan(Date.now());
 });
 
+test('language preference persists and is returned by the authenticated profile', async () => {
+  const verified = await createAccount('+919876543211');
+  const authorization = `Bearer ${verified.body.data.accessToken}`;
+
+  const updated = await request(app)
+    .patch('/api/v1/users/me/preferences')
+    .set('Authorization', authorization)
+    .send({ language: 'gu' })
+    .expect(200);
+  expect(updated.body.data.language).toBe('gu');
+
+  const profile = await request(app)
+    .get('/api/v1/auth/me')
+    .set('Authorization', authorization)
+    .expect(200);
+  expect(profile.body.data.user.language).toBe('gu');
+
+  const invalid = await request(app)
+    .patch('/api/v1/users/me/preferences')
+    .set('Authorization', authorization)
+    .send({ language: 'xx' })
+    .expect(422);
+  expect(invalid.body.error.code).toBe('VALIDATION_ERROR');
+});
+
+test('API errors preserve stable codes and honor the requested language', async () => {
+  const response = await request(app)
+    .get('/api/v1/does-not-exist')
+    .set('X-App-Language', 'mr')
+    .expect(404);
+
+  expect(response.headers['content-language']).toBe('mr');
+  expect(response.body.error.code).toBe('NOT_FOUND');
+  expect(response.body.error.message).toBe('मागितलेली नोंद सापडली नाही.');
+});
+
 test('an expired trial keeps reads available and blocks business writes', async () => {
   const verified = await createAccount('+919876543216');
   const { Customer, Subscription } = require('../src/models');

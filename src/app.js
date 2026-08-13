@@ -10,6 +10,7 @@ const realtimeEvents = require('./services/realtime-events.service');
 const { AppError } = require('./utils/errors');
 const { safeError } = require('./utils/logging');
 const { connectDatabase, databaseStatus } = require('./config/db');
+const { requestLocale } = require('./middleware/locale');
 const app = express();
 // Some managed hosts import the Express app instead of executing server.js.
 // Start the shared connection in both modes; connectDatabase is idempotent.
@@ -43,6 +44,7 @@ app.use(
   }),
 );
 app.use(express.json({ limit: "1mb" }));
+app.use(requestLocale);
 app.use(
   "/api/v1/auth/otp/request",
   rateLimit({
