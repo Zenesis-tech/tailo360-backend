@@ -21,9 +21,8 @@ async function updateStudio(req, res) {
     const logo = await Media.findOne({ _id: body.logoMediaId, studioId: req.auth.studio._id, purpose: 'studio_logo', status: 'ready' });
     if (!logo) throw new AppError(422, 'INVALID_STUDIO_LOGO', 'The selected studio logo is not ready.');
   }
-  if (ownerPhone && ownerPhone !== req.auth.user.phone) {
-    const existing = await User.exists({ phone: ownerPhone, _id: { $ne: req.auth.user._id } });
-    if (existing) throw new AppError(409, 'PHONE_ALREADY_IN_USE', 'This mobile number belongs to another account.');
+  if (ownerPhone && req.auth.user.phone && ownerPhone !== req.auth.user.phone) {
+    throw new AppError(422, 'LOGIN_PHONE_IMMUTABLE', 'The login phone cannot be changed from Studio Profile.');
   }
   if (ownerName || ownerPhone) {
     if (ownerName) req.auth.user.name = ownerName;
@@ -34,11 +33,25 @@ async function updateStudio(req, res) {
   if (body.settings) {
     update.settings = { ...req.auth.studio.settings.toObject(), ...body.settings, notifications: { ...req.auth.studio.settings.notifications.toObject(), ...body.settings.notifications }, invoice: { ...req.auth.studio.settings.invoice.toObject(), ...body.settings.invoice } };
   }
+  if (body.services) {
+    const serviceAudiences = new Set(body.settings?.garmentAudiences || []);
+    if (body.services.includes('mens_wear')) serviceAudiences.add('men');
+    if (body.services.some((service) => ['womens_wear', 'blouse_stitching', 'saree_stitching'].includes(service))) serviceAudiences.add('women');
+    if (body.services.includes('kids_wear')) serviceAudiences.add('kids');
+    if (body.services.includes('uniforms')) serviceAudiences.add('unisex');
+    if (serviceAudiences.size) {
+      update.settings = {
+        ...req.auth.studio.settings.toObject(),
+        ...update.settings,
+        garmentAudiences: [...serviceAudiences],
+      };
+    }
+  }
   if (body.name && ownerName && ownerPhone && body.address && body.businessType && body.services?.length && body.settings?.garmentAudiences?.length) {
     update.onboardingCompletedAt = new Date();
   }
   const value = await Studio.findByIdAndUpdate(req.auth.studio._id, update, { new: true, runValidators: true });
-  if (body.settings?.garmentAudiences) await provisionStarterGarments(value._id, body.settings.garmentAudiences);
+  if (update.settings?.garmentAudiences) await provisionStarterGarments(value._id, update.settings.garmentAudiences);
   res.json({ data: { ...value.toObject(), owner: { name: req.auth.user.name, phone: req.auth.user.phone, email: req.auth.user.email } } });
 }
 async function members(req, res) { res.json({ data: await Member.find({ studioId: req.auth.studio._id, status: { $ne: 'removed' } }).populate('userId', 'name phone') }); }
