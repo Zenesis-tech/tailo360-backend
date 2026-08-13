@@ -1,5 +1,5 @@
 const transitions = {
-  pending: ['measurements_pending', 'cutting', 'cancelled'],
+  pending: ['cutting', 'cancelled'],
   measurements_pending: ['cutting', 'cancelled'],
   cutting: ['stitching', 'cancelled'],
   stitching: ['trial', 'ready', 'cancelled'],

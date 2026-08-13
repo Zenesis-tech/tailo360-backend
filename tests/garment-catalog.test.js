@@ -2,6 +2,7 @@ const {
   catalog,
   templateCatalog,
 } = require("../src/services/garment-catalog.service");
+const { transitions } = require("../src/utils/order-status");
 
 describe("garment catalogue", () => {
   test("contains unique practical templates across every audience", () => {
@@ -21,5 +22,9 @@ describe("garment catalogue", () => {
         );
       }
     }
+  });
+
+  test("confirmed orders move directly to cutting", () => {
+    expect(transitions.pending).toEqual(["cutting", "cancelled"]);
   });
 });
