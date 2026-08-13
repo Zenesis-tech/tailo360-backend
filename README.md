@@ -9,7 +9,7 @@ The Express/MongoDB API is the authoritative source for studio data, workflow st
 3. Create a private Cloudflare R2 bucket and a bucket-scoped Read/Write API token. Set `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, and `R2_SECRET_ACCESS_KEY`.
 4. Add every mobile OAuth client ID to `GOOGLE_CLIENT_IDS` (comma-separated). The API verifies Google ID tokens; it never trusts a client-provided profile.
 5. Run `npm.cmd install` then `npm.cmd run dev` from this folder.
-4. The API is at `http://localhost:4000/api/v1`; `GET /health` confirms service availability.
+6. The API is at `http://localhost:4000/api/v1`; `GET /health` confirms service availability.
 
 ## OTP provider
 
@@ -29,8 +29,25 @@ Local development uses the fixed code `123456` when `OTP_DELIVERY_MODE=developme
 | Money/ops | `POST /payments`, `GET /payments/due`, `GET /dashboard`, `GET /calendar`, `GET /referral` |
 | Private media | `POST /media/upload-url`, `POST /media/:id/complete`, `GET /media/:id/url` |
 | Subscription | `GET /subscription`, `/subscription/plans`, `/subscription/products`, `POST /subscription/validate-purchase` |
+| Data portability | `GET /studio/export` |
+| Platform backups | `GET/POST /admin/backups`, `POST /admin/backups/:id/restore` |
 
 The existing detailed endpoint request/response contract is in `../docs/04-api-reference.md`. All write API errors have `{ error: { code, message, details? } }` and create-order/payment accepts `Idempotency-Key`.
+
+## Encrypted backups and restore
+
+Backups are an infrastructure responsibility and are never exposed to studio users. The scheduled job writes separate encrypted database collection snapshots and encrypted media objects to the private R2 bucket. Payloads use AES-256-GCM authenticated encryption, R2 server-side encryption is requested as an additional layer, concurrent jobs are prevented by a MongoDB lock, and expired backup prefixes are deleted according to `BACKUP_RETENTION_DAYS`.
+
+Generate a dedicated 32-byte key, encode it as 64 hexadecimal characters or base64, store it in the production secret manager as `BACKUP_ENCRYPTION_KEY`, and retain an offline recovery copy. Losing the key makes every backup permanently unreadable. Configure `BACKUP_R2_BUCKET` as a separate private bucket accessible by the R2 token, so deletion of the primary media bucket cannot erase recovery data. Set `BACKUP_ENABLED=true` only after both buckets and the encryption key are configured. The default schedule is 02:30 Asia/Kolkata with 30-day retention.
+
+Platform administrators can list and create backups through the admin API. An API restore requires maintenance mode and the exact confirmation string `RESTORE <backup-id>`. Operators with server access can run:
+
+```text
+npm run backup:now
+npm run backup:restore -- <backup-id> "RESTORE <backup-id>"
+```
+
+Always perform a restore drill in an isolated environment before relying on production recovery. Keep R2 credentials and the encryption key in separate security domains where possible.
 
 ## Garment audiences
 

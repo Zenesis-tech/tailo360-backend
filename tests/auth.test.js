@@ -4,6 +4,8 @@ process.env.JWT_ACCESS_SECRET = 'a-very-long-test-access-secret-that-is-at-least
 process.env.JWT_REFRESH_SECRET = 'a-very-long-test-refresh-secret-that-is-at-least-32';
 process.env.EXPOSE_DEV_OTP = 'true';
 process.env.OTP_DELIVERY_MODE = 'development';
+process.env.BACKUP_ENCRYPTION_KEY = Buffer.alloc(32, 9).toString('base64');
+process.env.BACKUP_R2_BUCKET = 'backup-test';
 
 const request = require('supertest');
 const { MongoMemoryServer } = require('mongodb-memory-server');
@@ -25,6 +27,8 @@ beforeAll(async () => {
     })),
     deleteObject: jest.fn(async () => ({})),
     putObject: jest.fn(async () => ({})),
+    getObject: jest.fn(async () => null),
+    deletePrefix: jest.fn(async () => ({})),
   }));
   mongoose = require('mongoose');
   await require('../src/config/db').connectDatabase();
@@ -251,6 +255,35 @@ test('business report exports require report permission and validate ranges', as
     .set('Authorization', `Bearer ${session.accessToken}`)
     .expect(403);
   expect(forbidden.body.error.code).toBe('FORBIDDEN');
+});
+
+test('studio owners can export their data while backup tooling stays platform-admin only', async () => {
+  const owner = await createAccount('+919876543230');
+  const ownerToken = owner.body.data.accessToken;
+  const exported = await request(app)
+    .get('/api/v1/studio/export')
+    .set('Authorization', `Bearer ${ownerToken}`)
+    .expect(200);
+  expect(exported.headers['content-disposition']).toContain('data-export');
+  expect(exported.body).toMatchObject({ schemaVersion: 1 });
+  expect(exported.body.studio._id).toBe(owner.body.data.studioId);
+
+  await request(app)
+    .get('/api/v1/admin/backups')
+    .set('Authorization', `Bearer ${ownerToken}`)
+    .expect(403);
+
+  const { User } = require('../src/models');
+  await User.findByIdAndUpdate(owner.body.data.user.id, { platformRole: 'admin' });
+  const adminSession = await require('../src/services/auth.service').issueSession(
+    await User.findById(owner.body.data.user.id),
+    await require('../src/models').Member.findOne({ userId: owner.body.data.user.id }),
+  );
+  const backups = await request(app)
+    .get('/api/v1/admin/backups')
+    .set('Authorization', `Bearer ${adminSession.accessToken}`)
+    .expect(200);
+  expect(backups.body.data).toEqual([]);
 });
 
 test('cash recorded through the payment endpoint appears in net collections', async () => {

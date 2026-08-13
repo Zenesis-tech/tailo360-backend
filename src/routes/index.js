@@ -25,6 +25,8 @@ const sync = wrapController(require("../controllers/sync.controller"));
 const subscriptionController = require("../controllers/subscription.controller");
 const subscriptions = wrapController(subscriptionController);
 const admin = wrapController(require("../controllers/admin.controller"));
+const backups = wrapController(require("../controllers/backup.controller"));
+const studioExport = wrapController(require("../controllers/studio-export.controller"));
 const authMiddleware = require("../middleware/auth");
 const authenticate = authMiddleware.authenticate;
 const authorize = authMiddleware.authorize;
@@ -49,6 +51,7 @@ router.patch("/notifications/:id/read", authenticate, notifications.markRead);
 router.post("/notifications/read-all", authenticate, notifications.markAllRead);
 router.get("/sync/changes", authenticate, sync.changes);
 router.get("/reports", authenticate, authorize("reports:read"), ops.reports);
+router.get("/studio/export", authenticate, authorize("settings:write"), studioExport.exportStudio);
 router.get(
   "/reports/export",
   authenticate,
@@ -331,4 +334,7 @@ router.get("/admin/subscription-events", authenticate, requirePlatformAdmin, adm
 router.get("/admin/audit", authenticate, requirePlatformAdmin, admin.audit);
 router.get("/admin/config", authenticate, requirePlatformAdmin, admin.config);
 router.put("/admin/config", authenticate, requirePlatformAdmin, admin.updateConfig);
+router.get("/admin/backups", authenticate, requirePlatformAdmin, backups.list);
+router.post("/admin/backups", authenticate, requirePlatformAdmin, backups.create);
+router.post("/admin/backups/:id/restore", authenticate, requirePlatformAdmin, backups.restore);
 module.exports = router;

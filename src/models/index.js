@@ -167,6 +167,8 @@ const measurementSchema = new Schema(
     customizations: { type: Map, of: String },
     unit: { type: String, enum: ["in", "cm"], required: true },
     createdBy: { type: Schema.Types.ObjectId, ref: "User" },
+    restoredAt: Date,
+    restoredBy: { type: Schema.Types.ObjectId, ref: "User" },
   },
   base,
 );
@@ -688,6 +690,32 @@ const auditLogSchema = new Schema(
   base,
 );
 auditLogSchema.index({ createdAt: -1 });
+const backupRecordSchema = new Schema(
+  {
+    reason: { type: String, enum: ["scheduled", "manual"], required: true },
+    status: { type: String, enum: ["running", "completed", "failed", "restoring"], required: true, index: true },
+    prefix: { type: String, required: true, unique: true },
+    manifestKey: String,
+    collectionCount: { type: Number, default: 0 },
+    documentCount: { type: Number, default: 0 },
+    mediaCount: { type: Number, default: 0 },
+    sizeBytes: { type: Number, default: 0 },
+    startedAt: { type: Date, required: true },
+    completedAt: Date,
+    expiresAt: { type: Date, index: true },
+    createdBy: { type: Schema.Types.ObjectId, ref: "User" },
+    error: String,
+  },
+  base,
+);
+const backupLockSchema = new Schema(
+  {
+    key: { type: String, required: true, unique: true },
+    owner: { type: String, required: true },
+    expiresAt: { type: Date, required: true },
+  },
+  base,
+);
 module.exports = {
   User: model("User", userSchema),
   Studio: model("Studio", studioSchema),
@@ -714,5 +742,7 @@ module.exports = {
   SupportTicket: model("SupportTicket", supportSchema),
   AppConfig: model("AppConfig", appConfigSchema),
   AuditLog: model("AuditLog", auditLogSchema),
+  BackupRecord: model("BackupRecord", backupRecordSchema),
+  BackupLock: model("BackupLock", backupLockSchema),
   RealtimeEvent: model("RealtimeEvent", realtimeEventSchema),
 };
