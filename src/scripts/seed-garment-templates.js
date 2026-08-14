@@ -29,6 +29,32 @@ function hasLegacyGenericFields(template) {
   );
 }
 
+function mergeCustomizationGroups(template, definition) {
+  let changed = false;
+  const desiredGroups = customizationGroupsFor(definition);
+  for (const desired of desiredGroups) {
+    const existing = template.customizationGroups.find(
+      (group) => group.name.toLowerCase() === desired.name.toLowerCase(),
+    );
+    if (!existing) {
+      template.customizationGroups.push(desired);
+      changed = true;
+      continue;
+    }
+    for (const choice of desired.choices) {
+      if (
+        !existing.choices.some(
+          (item) => item.name.toLowerCase() === choice.name.toLowerCase(),
+        )
+      ) {
+        existing.choices.push(choice);
+        changed = true;
+      }
+    }
+  }
+  return changed;
+}
+
 async function run() {
   const audiences = Object.keys(catalog);
   await connectDatabase();
@@ -54,6 +80,9 @@ async function run() {
         template.audience = audience;
         template.fields = fieldsFor(definition);
         template.customizationGroups = customizationGroupsFor(definition);
+        await template.save();
+        upgraded += 1;
+      } else if (mergeCustomizationGroups(template, definition)) {
         await template.save();
         upgraded += 1;
       } else {

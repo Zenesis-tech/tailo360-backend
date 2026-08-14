@@ -24,6 +24,27 @@ describe("garment catalogue", () => {
     }
   });
 
+  test("every template starts with editable garment-specific options", () => {
+    for (const templates of Object.values(templateCatalog)) {
+      for (const template of templates) {
+        expect(template.customizations.length).toBeGreaterThanOrEqual(3);
+        for (const group of template.customizations) {
+          expect(group.name.trim()).not.toBe("");
+          expect(group.choices.length).toBeGreaterThanOrEqual(2);
+          expect(new Set(group.choices).size).toBe(group.choices.length);
+        }
+      }
+    }
+    const shirt = templateCatalog.men.find(({ name }) => name === "Shirt");
+    expect(shirt.customizations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "Collar", choices: expect.arrayContaining(["Classic", "Spread"]) }),
+        expect.objectContaining({ name: "Sleeve", choices: expect.arrayContaining(["Full", "Half"]) }),
+        expect.objectContaining({ name: "Cuff", choices: expect.arrayContaining(["Rounded", "Squared"]) }),
+      ]),
+    );
+  });
+
   test("confirmed orders move directly to cutting", () => {
     expect(transitions.pending).toEqual(["cutting", "cancelled"]);
   });
