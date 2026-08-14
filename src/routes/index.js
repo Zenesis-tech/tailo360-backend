@@ -36,6 +36,7 @@ const { idempotent } = require("../middleware/idempotency");
 const router = express.Router();
 router.post("/auth/otp/request", auth.requestOtp);
 router.post("/auth/otp/verify", auth.verifyOtp);
+router.post("/auth/firebase/phone", auth.firebasePhone);
 router.post("/auth/google", auth.google);
 router.post("/auth/admin/login", auth.adminLogin);
 router.patch("/users/me/preferences", authenticate, auth.updatePreferences);

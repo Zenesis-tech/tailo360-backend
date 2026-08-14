@@ -78,6 +78,22 @@ app.use(
   }),
 );
 app.use(
+  "/api/v1/auth/firebase/phone",
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: () => env.NODE_ENV === "test",
+    message: {
+      error: {
+        code: "RATE_LIMITED",
+        message: "Too many phone verification attempts. Please try again later.",
+      },
+    },
+  }),
+);
+app.use(
   "/api/v1/auth/admin/login",
   rateLimit({
     windowMs: 15 * 60 * 1000,

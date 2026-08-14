@@ -1,22 +1,6 @@
-const admin = require("firebase-admin");
-const env = require("../config/env");
 const { Device, Member, Notification } = require("../models");
 const realtimeEvents = require("./realtime-events.service");
-
-let initialized = false;
-
-function firebase() {
-  if (!env.FIREBASE_SERVICE_ACCOUNT_JSON) return null;
-  if (!initialized) {
-    admin.initializeApp({
-      credential: admin.credential.cert(
-        JSON.parse(env.FIREBASE_SERVICE_ACCOUNT_JSON),
-      ),
-    });
-    initialized = true;
-  }
-  return admin;
-}
+const { firebaseAdmin } = require("./firebase-admin.service");
 
 const invalidTokenCodes = new Set([
   "messaging/registration-token-not-registered",
@@ -81,7 +65,7 @@ async function deliver(notification) {
     userId: notification.userId,
     active: true,
   }).select("token");
-  const app = firebase();
+  const app = firebaseAdmin();
   if (!app || devices.length === 0) {
     notification.status = "stored";
     await notification.save();

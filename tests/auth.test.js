@@ -30,6 +30,21 @@ beforeAll(async () => {
     getObject: jest.fn(async () => null),
     deletePrefix: jest.fn(async () => ({})),
   }));
+  jest.doMock('../src/services/firebase-admin.service', () => ({
+    firebaseAdmin: jest.fn(() => ({
+      auth: () => ({
+        verifyIdToken: jest.fn(async (token) => {
+          if (token.startsWith('invalid')) throw new Error('invalid token');
+          return {
+            uid: 'firebase-phone-user',
+            phone_number: '+919876543299',
+            firebase: { sign_in_provider: 'phone' },
+          };
+        }),
+      }),
+      messaging: () => ({ sendEachForMulticast: jest.fn() }),
+    })),
+  }));
   mongoose = require('mongoose');
   await require('../src/config/db').connectDatabase();
   app = require('../src/app');
@@ -86,6 +101,25 @@ test('language preference persists and is returned by the authenticated profile'
     .send({ language: 'xx' })
     .expect(422);
   expect(invalid.body.error.code).toBe('VALIDATION_ERROR');
+});
+
+test('Firebase phone ID token provisions a normal Tailo360 session', async () => {
+  const verified = await request(app)
+    .post('/api/v1/auth/firebase/phone')
+    .send({ idToken: `valid-${'x'.repeat(120)}` })
+    .expect(200);
+
+  expect(verified.body.data.user.phone).toBe('+919876543299');
+  expect(verified.body.data.accessToken).toBeTruthy();
+  expect(verified.body.data.refreshToken).toBeTruthy();
+
+  await request(app)
+    .post('/api/v1/auth/firebase/phone')
+    .send({ idToken: `invalid-${'x'.repeat(120)}` })
+    .expect(401)
+    .expect(({ body }) => {
+      expect(body.error.code).toBe('FIREBASE_TOKEN_INVALID');
+    });
 });
 
 test('API errors preserve stable codes and honor the requested language', async () => {

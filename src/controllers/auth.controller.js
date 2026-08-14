@@ -8,16 +8,35 @@ const { AppError } = require('../utils/errors');
 const { hash, createStudioFor, issueSession } = require('../services/auth.service');
 const otpProvider = require('../services/otp-provider.service');
 const { verifyPassword } = require('../services/password.service');
+const { firebaseAdmin } = require('../services/firebase-admin.service');
 const useOtpProvider = () => env.NODE_ENV === 'production' || env.OTP_DELIVERY_MODE === 'provider';
 const phoneSchema = z.string().trim().transform((value) => value.replace(/\s|-/g, '')).refine((value) => /^\+?[1-9]\d{9,14}$/.test(value), 'Use a valid mobile number.').transform((value) => value.startsWith('+') ? value : `+91${value}`);
 async function requestOtp(req, res) { const phone = phoneSchema.parse(req.body.phone); if (useOtpProvider()) { await otpProvider.sendOtp(phone); return res.status(202).json({ data: { phone, expiresInSeconds: env.OTP_TTL_MINUTES * 60 } }); } const code = '123456'; await Otp.deleteMany({ phone }); await Otp.create({ phone, codeHash: hash(code), expiresAt: new Date(Date.now() + env.OTP_TTL_MINUTES * 60000) }); res.status(202).json({ data: { phone, expiresInSeconds: env.OTP_TTL_MINUTES * 60, ...(env.EXPOSE_DEV_OTP ? { developmentCode: code } : {}) } }); }
 async function verifyOtp(req, res) {
   const body = z.object({ phone: phoneSchema, code: z.string().regex(/^\d{6}$/), studioName: z.string().trim().min(2).max(80).optional(), referralCode: z.string().trim().toUpperCase().max(10).optional(), garmentAudiences: z.array(z.enum(['men', 'women', 'kids', 'unisex'])).min(1).max(4).optional() }).parse(req.body);
   if (useOtpProvider()) { if (!await otpProvider.verifyOtp(body.phone, body.code)) throw new AppError(401, 'OTP_INVALID', 'The code is invalid or expired.'); } else { const otp = await Otp.findOne({ phone: body.phone }).sort({ createdAt: -1 }); if (!otp || otp.expiresAt < new Date() || otp.codeHash !== hash(body.code)) throw new AppError(401, 'OTP_INVALID', 'The code is invalid or expired.'); await Otp.deleteMany({ phone: body.phone }); }
-  let user = await User.findOne({ phone: body.phone }); let isNew = false; let member; let studio;
-  if (!user) { user = await User.create({ phone: body.phone }); ({ studio, owner: member } = await createStudioFor(user, body)); isNew = true; } else { member = await Member.findOne({ userId: user._id, status: { $in: ['active', 'limited'] } }); if (!member) throw new AppError(403, 'NO_ACTIVE_STUDIO', 'This account has no active studio membership.'); studio = await Studio.findById(member.studioId); }
+  return finishPhoneAuthentication(body.phone, body, res);
+}
+async function finishPhoneAuthentication(phone, input, res) {
+  let user = await User.findOne({ phone }); let isNew = false; let member; let studio;
+  if (!user) { user = await User.create({ phone }); ({ studio, owner: member } = await createStudioFor(user, input)); isNew = true; } else { member = await Member.findOne({ userId: user._id, status: { $in: ['active', 'limited'] } }); if (!member) throw new AppError(403, 'NO_ACTIVE_STUDIO', 'This account has no active studio membership.'); studio = await Studio.findById(member.studioId); }
   const needsOnboarding = isNew || (!studio.onboardingCompletedAt && studio.name === 'My Studio');
   const tokens = await issueSession(user, member); res.json({ data: { ...tokens, isNew, needsOnboarding, user: { id: user.id, phone: user.phone, name: user.name, language: user.language }, studioId: member.studioId, role: member.role } });
+}
+async function firebasePhone(req, res) {
+  const input = z.object({ idToken: z.string().min(100).max(10000) }).parse(req.body);
+  let decoded;
+  try {
+    decoded = await firebaseAdmin({ required: true }).auth().verifyIdToken(input.idToken, true);
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    throw new AppError(401, 'FIREBASE_TOKEN_INVALID', 'Firebase phone verification is invalid or expired.');
+  }
+  if (decoded.firebase?.sign_in_provider !== 'phone' || !decoded.phone_number) {
+    throw new AppError(401, 'FIREBASE_PHONE_REQUIRED', 'A verified Firebase phone number is required.');
+  }
+  const phone = phoneSchema.parse(decoded.phone_number);
+  return finishPhoneAuthentication(phone, {}, res);
 }
 async function google(req, res) {
   if (!env.GOOGLE_CLIENT_IDS.length) throw new AppError(503, 'GOOGLE_AUTH_NOT_CONFIGURED', 'Google sign-in is not configured.');
@@ -65,4 +84,4 @@ async function updatePreferences(req, res) {
   await req.auth.user.save();
   res.json({ data: { language: req.auth.user.language } });
 }
-module.exports = { requestOtp, verifyOtp, google, adminLogin, refresh, logout, me, updatePreferences };
+module.exports = { requestOtp, verifyOtp, firebasePhone, google, adminLogin, refresh, logout, me, updatePreferences };

@@ -17,11 +17,17 @@ Production OTP delivery defaults to MSG91. Set `OTP_PROVIDER=twilio` to use [Twi
 
 Local development uses the fixed code `123456` when `OTP_DELIVERY_MODE=development`. Set `OTP_DELIVERY_MODE=provider` to send and verify real SMS OTPs locally through the configured provider. Production always uses the provider regardless of this setting.
 
+### Firebase Phone Authentication option
+
+The Flutter sign-in screen also offers Firebase SMS as an independent option. Firebase sends and verifies the SMS on the device, then the app posts the resulting ID token to `POST /auth/firebase/phone`. The API verifies that it is a current Firebase token issued specifically by the `phone` provider before creating the normal Tailo360 access and refresh tokens.
+
+To enable it, turn on the Phone provider in Firebase Authentication, register the Android release and debug SHA-1/SHA-256 fingerprints, keep the current `google-services.json` in `android/app`, and set `FIREBASE_SERVICE_ACCOUNT_JSON` on the API. For iOS, add the Firebase-generated `GoogleService-Info.plist`, enable Push Notifications and Background Modes, and configure an APNs key in Firebase. Use Firebase test phone numbers during development to avoid sending real SMS messages.
+
 ## Key endpoint groups
 
 | Group | Endpoints |
 | --- | --- |
-| Auth | `POST /auth/otp/request`, `/auth/otp/verify`, `/auth/google`, `/auth/refresh`, `/auth/logout`, `GET /auth/me` |
+| Auth | `POST /auth/otp/request`, `/auth/otp/verify`, `/auth/firebase/phone`, `/auth/google`, `/auth/refresh`, `/auth/logout`, `GET /auth/me` |
 | Studio | `GET/PATCH /studio`, `GET /studio/members` |
 | Customers | `GET/POST /customers`, `GET/PATCH/DELETE /customers/:id`, versioned measurements |
 | Templates/prices | `GET/POST/PATCH /garment-templates`, `GET /pricing`, `PUT /pricing/:templateId` |
