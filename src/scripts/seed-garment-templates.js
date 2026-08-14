@@ -6,6 +6,7 @@ const {
   catalog,
   templateCatalog,
   fieldsFor,
+  customizationGroupsFor,
   provisionStarterGarments,
 } = require("../services/garment-catalog.service");
 
@@ -52,6 +53,7 @@ async function run() {
       if (isEmpty || isUntouchedGeneric) {
         template.audience = audience;
         template.fields = fieldsFor(definition);
+        template.customizationGroups = customizationGroupsFor(definition);
         await template.save();
         upgraded += 1;
       } else {

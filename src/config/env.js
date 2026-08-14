@@ -23,6 +23,7 @@ const schema = z.object({
   ALLOWED_ORIGINS: z.string().default(''),
   UPLOAD_DIR: z.string().default('uploads'),
   MAX_FILE_SIZE_MB: z.coerce.number().positive().default(15),
+  MAX_FABRIC_PHOTOS_PER_GARMENT: z.coerce.number().int().min(1).max(20).default(5),
   R2_ACCOUNT_ID: z.string().optional(),
   R2_BUCKET: z.string().optional(),
   R2_ACCESS_KEY_ID: z.string().optional(),

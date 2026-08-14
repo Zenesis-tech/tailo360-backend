@@ -7,19 +7,37 @@ const measurement = (name, required = true) => ({
   required,
 });
 
+const customization = (name, choices) => ({ name, choices });
+
 const templateCatalog = {
   men: [
     {
       name: "Shirt",
       fields: ["Shirt Length", "Shoulder", "Chest", "Waist", "Seat", "Neck", "Sleeve Length", "Arm Hole", "Bicep", "Cuff"],
+      customizations: [
+        customization("Collar", ["Standard", "Rounded", "Mandarin", "Button-down"]),
+        customization("Cuff", ["Standard", "Rounded", "French", "Single", "Double"]),
+        customization("Pocket", ["No pocket", "Single", "Double"]),
+        customization("Placket", ["Regular", "Hidden", "Contrast"]),
+      ],
     },
     {
       name: "Trousers",
       fields: ["Trouser Length", "Inseam", "Waist", "Seat / Hip", "Thigh", "Knee", "Bottom Opening", "Front Rise", "Back Rise"],
+      customizations: [
+        customization("Waistband", ["Standard", "Elastic back", "Drawstring"]),
+        customization("Pleats", ["Flat front", "Single pleat", "Double pleat"]),
+        customization("Bottom", ["Plain", "Cuffed", "Narrow"]),
+      ],
     },
     {
       name: "Kurta",
       fields: ["Kurta Length", "Shoulder", "Chest", "Waist", "Hip", "Neck", "Sleeve Length", "Arm Hole", "Bicep", "Cuff", "Side Slit Length"],
+      customizations: [
+        customization("Collar", ["Standard", "Mandarin", "V neck", "Round"]),
+        customization("Cuff", ["Plain", "Button", "Contrast"]),
+        customization("Placket", ["Short", "Full", "Hidden"]),
+      ],
     },
     {
       name: "Pyjama",
@@ -32,6 +50,11 @@ const templateCatalog = {
     {
       name: "Blazer",
       fields: ["Blazer Length", "Shoulder", "Chest", "Waist", "Seat", "Sleeve Length", "Arm Hole", "Bicep", "Wrist", "Neck"],
+      customizations: [
+        customization("Lapel", ["Notch", "Peak", "Shawl"]),
+        customization("Buttons", ["Single button", "Two button", "Double breasted"]),
+        customization("Vent", ["No vent", "Single vent", "Double vent"]),
+      ],
     },
     {
       name: "Men’s suit",
@@ -50,10 +73,20 @@ const templateCatalog = {
     {
       name: "Blouse",
       fields: ["Blouse Length", "Shoulder", "Bust", "Under Bust", "Waist", "Front Neck Depth", "Back Neck Depth", "Arm Hole", "Sleeve Length", "Bicep", "Sleeve Opening"],
+      customizations: [
+        customization("Neck", ["Round", "V neck", "Boat", "Sweetheart"]),
+        customization("Sleeve", ["Sleeveless", "Short", "Elbow", "Full"]),
+        customization("Back", ["Closed", "Deep back", "Tie back"]),
+      ],
     },
     {
       name: "Kurti",
       fields: ["Kurti Length", "Shoulder", "Bust", "Waist", "Hip", "Front Neck Depth", "Back Neck Depth", "Arm Hole", "Sleeve Length", "Bicep", "Sleeve Opening", "Side Slit Length"],
+      customizations: [
+        customization("Neck", ["Round", "V neck", "Mandarin", "Boat"]),
+        customization("Sleeve", ["Short", "Three-quarter", "Full"]),
+        customization("Side slit", ["None", "Short", "Regular", "High"]),
+      ],
     },
     {
       name: "Kameez",
@@ -158,6 +191,19 @@ function fieldsFor(template) {
   }));
 }
 
+function customizationGroupsFor(template) {
+  return (template.customizations || []).map((group) => ({
+    id: nanoid(),
+    name: group.name,
+    choices: group.choices.map((choice, position) => ({
+      id: nanoid(),
+      name: choice,
+      active: true,
+      position,
+    })),
+  }));
+}
+
 async function provisionStarterGarments(_studioId, audiences) {
   const selected = [...new Set(audiences)].filter(
     (audience) => templateCatalog[audience],
@@ -174,6 +220,7 @@ async function provisionStarterGarments(_studioId, audiences) {
               name: template.name,
               audience,
               fields: fieldsFor(template),
+              customizationGroups: customizationGroupsFor(template),
             },
           },
           { upsert: true },
@@ -187,5 +234,6 @@ module.exports = {
   catalog,
   templateCatalog,
   fieldsFor,
+  customizationGroupsFor,
   provisionStarterGarments,
 };

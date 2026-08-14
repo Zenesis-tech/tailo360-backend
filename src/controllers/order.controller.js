@@ -3,6 +3,7 @@ const { Order, Customer, GarmentTemplate, Price } = require("../models");
 const { AppError, notFound } = require("../utils/errors");
 const { canTransition } = require("../utils/order-status");
 const { escapedSearch } = require("../utils/search");
+const { maxFabricPhotosPerGarment } = require("../config/order-limits");
 const workflowNotifications = require("../services/workflow-notifications.service");
 const lineInput = z.object({
   templateId: z.string(),
@@ -10,7 +11,7 @@ const lineInput = z.object({
   measurements: z.record(z.string()).default({}),
   customizations: z.record(z.string()).default({}),
   measurementSource: z.enum(["saved", "adjusted", "fresh"]).default("fresh"),
-  fabricMedia: z.array(z.string()).max(50).default([]),
+  fabricMedia: z.array(z.string()).max(maxFabricPhotosPerGarment).default([]),
   sampleMedia: z.string().optional(),
 });
 const orderInput = z.object({
