@@ -19,7 +19,7 @@ Local development uses the fixed code `123456` when `OTP_DELIVERY_MODE=developme
 
 ### Firebase Phone Authentication option
 
-The Flutter sign-in screen also offers Firebase SMS as an independent option. Firebase sends and verifies the SMS on the device, then the app posts the resulting ID token to `POST /auth/firebase/phone`. The API verifies that it is a current Firebase token issued specifically by the `phone` provider before creating the normal Tailo360 access and refresh tokens.
+Phone authentication is controlled by `PHONE_AUTH_MODE`; users see one Continue button and never choose the infrastructure provider. Set `PHONE_AUTH_MODE=server` to use `OTP_PROVIDER` (MSG91 or Twilio), or set `PHONE_AUTH_MODE=firebase` to use Firebase Phone Auth. The Flutter app reads this public configuration immediately before requesting a code. In Firebase mode, Firebase sends and verifies the SMS on the device, then the app posts the resulting ID token to `POST /auth/firebase/phone`. The API verifies that it is a current Firebase token issued specifically by the `phone` provider before creating the normal Tailo360 access and refresh tokens.
 
 To enable it, turn on the Phone provider in Firebase Authentication, register the Android release and debug SHA-1/SHA-256 fingerprints, keep the current `google-services.json` in `android/app`, and set `FIREBASE_SERVICE_ACCOUNT_JSON` on the API. For iOS, add the Firebase-generated `GoogleService-Info.plist`, enable Push Notifications and Background Modes, and configure an APNs key in Firebase. Use Firebase test phone numbers during development to avoid sending real SMS messages.
 

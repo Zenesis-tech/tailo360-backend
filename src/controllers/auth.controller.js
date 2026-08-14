@@ -11,8 +11,10 @@ const { verifyPassword } = require('../services/password.service');
 const { firebaseAdmin } = require('../services/firebase-admin.service');
 const useOtpProvider = () => env.NODE_ENV === 'production' || env.OTP_DELIVERY_MODE === 'provider';
 const phoneSchema = z.string().trim().transform((value) => value.replace(/\s|-/g, '')).refine((value) => /^\+?[1-9]\d{9,14}$/.test(value), 'Use a valid mobile number.').transform((value) => value.startsWith('+') ? value : `+91${value}`);
-async function requestOtp(req, res) { const phone = phoneSchema.parse(req.body.phone); if (useOtpProvider()) { await otpProvider.sendOtp(phone); return res.status(202).json({ data: { phone, expiresInSeconds: env.OTP_TTL_MINUTES * 60 } }); } const code = '123456'; await Otp.deleteMany({ phone }); await Otp.create({ phone, codeHash: hash(code), expiresAt: new Date(Date.now() + env.OTP_TTL_MINUTES * 60000) }); res.status(202).json({ data: { phone, expiresInSeconds: env.OTP_TTL_MINUTES * 60, ...(env.EXPOSE_DEV_OTP ? { developmentCode: code } : {}) } }); }
+function authConfig(req, res) { res.json({ data: { phoneAuthMode: env.PHONE_AUTH_MODE } }); }
+async function requestOtp(req, res) { if (env.PHONE_AUTH_MODE !== 'server') throw new AppError(409, 'PHONE_AUTH_PROVIDER_DISABLED', 'Server SMS verification is currently disabled.'); const phone = phoneSchema.parse(req.body.phone); if (useOtpProvider()) { await otpProvider.sendOtp(phone); return res.status(202).json({ data: { phone, expiresInSeconds: env.OTP_TTL_MINUTES * 60 } }); } const code = '123456'; await Otp.deleteMany({ phone }); await Otp.create({ phone, codeHash: hash(code), expiresAt: new Date(Date.now() + env.OTP_TTL_MINUTES * 60000) }); res.status(202).json({ data: { phone, expiresInSeconds: env.OTP_TTL_MINUTES * 60, ...(env.EXPOSE_DEV_OTP ? { developmentCode: code } : {}) } }); }
 async function verifyOtp(req, res) {
+  if (env.PHONE_AUTH_MODE !== 'server') throw new AppError(409, 'PHONE_AUTH_PROVIDER_DISABLED', 'Server SMS verification is currently disabled.');
   const body = z.object({ phone: phoneSchema, code: z.string().regex(/^\d{6}$/), studioName: z.string().trim().min(2).max(80).optional(), referralCode: z.string().trim().toUpperCase().max(10).optional(), garmentAudiences: z.array(z.enum(['men', 'women', 'kids', 'unisex'])).min(1).max(4).optional() }).parse(req.body);
   if (useOtpProvider()) { if (!await otpProvider.verifyOtp(body.phone, body.code)) throw new AppError(401, 'OTP_INVALID', 'The code is invalid or expired.'); } else { const otp = await Otp.findOne({ phone: body.phone }).sort({ createdAt: -1 }); if (!otp || otp.expiresAt < new Date() || otp.codeHash !== hash(body.code)) throw new AppError(401, 'OTP_INVALID', 'The code is invalid or expired.'); await Otp.deleteMany({ phone: body.phone }); }
   return finishPhoneAuthentication(body.phone, body, res);
@@ -24,6 +26,7 @@ async function finishPhoneAuthentication(phone, input, res) {
   const tokens = await issueSession(user, member); res.json({ data: { ...tokens, isNew, needsOnboarding, user: { id: user.id, phone: user.phone, name: user.name, language: user.language }, studioId: member.studioId, role: member.role } });
 }
 async function firebasePhone(req, res) {
+  if (env.PHONE_AUTH_MODE !== 'firebase') throw new AppError(409, 'PHONE_AUTH_PROVIDER_DISABLED', 'Firebase phone verification is currently disabled.');
   const input = z.object({ idToken: z.string().min(100).max(10000) }).parse(req.body);
   let decoded;
   try {
@@ -84,4 +87,4 @@ async function updatePreferences(req, res) {
   await req.auth.user.save();
   res.json({ data: { language: req.auth.user.language } });
 }
-module.exports = { requestOtp, verifyOtp, firebasePhone, google, adminLogin, refresh, logout, me, updatePreferences };
+module.exports = { authConfig, requestOtp, verifyOtp, firebasePhone, google, adminLogin, refresh, logout, me, updatePreferences };

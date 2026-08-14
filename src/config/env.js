@@ -11,6 +11,7 @@ const schema = z.object({
   JWT_ACCESS_TTL: z.string().default('15m'),
   JWT_REFRESH_TTL: z.string().default('365d'),
   OTP_TTL_MINUTES: z.coerce.number().int().positive().default(10),
+  PHONE_AUTH_MODE: z.enum(['server', 'firebase']).default('server'),
   OTP_PROVIDER: z.enum(['msg91', 'twilio']).default('msg91'),
   OTP_DELIVERY_MODE: z.enum(['development', 'provider']).default('development'),
   MSG91_AUTH_KEY: z.string().default(''),

@@ -104,22 +104,37 @@ test('language preference persists and is returned by the authenticated profile'
 });
 
 test('Firebase phone ID token provisions a normal Tailo360 session', async () => {
-  const verified = await request(app)
-    .post('/api/v1/auth/firebase/phone')
-    .send({ idToken: `valid-${'x'.repeat(120)}` })
-    .expect(200);
+  const env = require('../src/config/env');
+  const previousMode = env.PHONE_AUTH_MODE;
+  env.PHONE_AUTH_MODE = 'firebase';
+  try {
+    const config = await request(app).get('/api/v1/auth/config').expect(200);
+    expect(config.body.data.phoneAuthMode).toBe('firebase');
 
-  expect(verified.body.data.user.phone).toBe('+919876543299');
-  expect(verified.body.data.accessToken).toBeTruthy();
-  expect(verified.body.data.refreshToken).toBeTruthy();
+    const verified = await request(app)
+      .post('/api/v1/auth/firebase/phone')
+      .send({ idToken: `valid-${'x'.repeat(120)}` })
+      .expect(200);
 
-  await request(app)
-    .post('/api/v1/auth/firebase/phone')
-    .send({ idToken: `invalid-${'x'.repeat(120)}` })
-    .expect(401)
-    .expect(({ body }) => {
-      expect(body.error.code).toBe('FIREBASE_TOKEN_INVALID');
-    });
+    expect(verified.body.data.user.phone).toBe('+919876543299');
+    expect(verified.body.data.accessToken).toBeTruthy();
+    expect(verified.body.data.refreshToken).toBeTruthy();
+
+    await request(app)
+      .post('/api/v1/auth/firebase/phone')
+      .send({ idToken: `invalid-${'x'.repeat(120)}` })
+      .expect(401)
+      .expect(({ body }) => {
+        expect(body.error.code).toBe('FIREBASE_TOKEN_INVALID');
+      });
+
+    await request(app)
+      .post('/api/v1/auth/otp/request')
+      .send({ phone: '+919876543299' })
+      .expect(409);
+  } finally {
+    env.PHONE_AUTH_MODE = previousMode;
+  }
 });
 
 test('API errors preserve stable codes and honor the requested language', async () => {

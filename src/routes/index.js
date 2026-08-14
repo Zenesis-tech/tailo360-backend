@@ -34,6 +34,7 @@ const requireWritableSubscription = asyncRoute(authMiddleware.requireWritableSub
 const requirePlatformAdmin = authMiddleware.requirePlatformAdmin;
 const { idempotent } = require("../middleware/idempotency");
 const router = express.Router();
+router.get("/auth/config", auth.authConfig);
 router.post("/auth/otp/request", auth.requestOtp);
 router.post("/auth/otp/verify", auth.verifyOtp);
 router.post("/auth/firebase/phone", auth.firebasePhone);
