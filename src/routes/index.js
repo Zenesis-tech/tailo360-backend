@@ -169,6 +169,12 @@ router.put(
   templates.setPrice,
 );
 router.get("/orders", authenticate, authorize("orders:read"), orders.list);
+router.get(
+  "/orders/config",
+  authenticate,
+  authorize("orders:read"),
+  orders.config,
+);
 router.post(
   "/orders",
   authenticate,

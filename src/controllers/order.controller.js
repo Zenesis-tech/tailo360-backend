@@ -5,15 +5,111 @@ const { canTransition } = require("../utils/order-status");
 const { escapedSearch } = require("../utils/search");
 const { maxFabricPhotosPerGarment } = require("../config/order-limits");
 const workflowNotifications = require("../services/workflow-notifications.service");
+const measurementValue = z
+  .string()
+  .trim()
+  .max(30)
+  .refine(
+    (value) =>
+      value === "" ||
+      /^\d+(\.\d{1,2})?(\s+(1\/4|1\/2|3\/4))?(\s*(in|cm))?$/i.test(value),
+    "Measurements must be numeric values.",
+  );
 const lineInput = z.object({
   templateId: z.string(),
   quantity: z.number().int().min(1).max(50),
-  measurements: z.record(z.string()).default({}),
-  customizations: z.record(z.string()).default({}),
+  measurements: z.record(measurementValue).default({}),
+  customizations: z.record(z.string().trim().min(1).max(80)).default({}),
   measurementSource: z.enum(["saved", "adjusted", "fresh"]).default("fresh"),
   fabricMedia: z.array(z.string()).max(maxFabricPhotosPerGarment).default([]),
   sampleMedia: z.string().optional(),
 });
+
+async function pricedOrderLines(studioId, inputLines, existingPrices = new Map()) {
+  const templateIds = [...new Set(inputLines.map((line) => line.templateId))];
+  if (templateIds.length !== inputLines.length)
+    throw new AppError(
+      422,
+      "DUPLICATE_GARMENT",
+      "Add each garment once and use quantity for multiple pieces.",
+    );
+  const templates = await GarmentTemplate.find({
+    _id: { $in: templateIds },
+    $or: [
+      { scope: "global" },
+      { studioId, scope: { $ne: "global" } },
+    ],
+  });
+  const unavailable = templateIds.filter((id) => {
+    const template = templates.find((item) => item.id === id);
+    return !template || (!template.active && !existingPrices.has(id));
+  });
+  if (unavailable.length)
+    throw new AppError(
+      422,
+      "INVALID_GARMENT",
+      "One or more garment templates are unavailable.",
+    );
+  const prices = await Price.find({
+    studioId,
+    templateId: { $in: templateIds },
+    active: true,
+  }).sort({ effectiveFrom: -1 });
+  const currentPrices = new Map();
+  prices.forEach((price) => {
+    if (!currentPrices.has(price.templateId.toString()))
+      currentPrices.set(price.templateId.toString(), price);
+  });
+  const missing = templateIds.filter(
+    (id) => !currentPrices.has(id) && !existingPrices.has(id),
+  );
+  if (missing.length)
+    throw new AppError(
+      422,
+      "ORDER_MISSING_PRICE",
+      "Set a price for every garment before saving the order.",
+      { templateIds: missing },
+    );
+  const templateMap = new Map(templates.map((template) => [template.id, template]));
+  return inputLines.map((line) => {
+    const template = templateMap.get(line.templateId);
+    // Preserve the price captured when an existing order was created. Only a
+    // newly added garment uses today's active price.
+    const unitPricePaise =
+      existingPrices.get(line.templateId) ??
+      currentPrices.get(line.templateId).amountPaise;
+    const groups = new Map(
+      template.customizationGroups.map((group) => [group.name, group]),
+    );
+    const invalidCustomizations = Object.entries(line.customizations)
+      .filter(([groupName, choice]) => {
+        const group = groups.get(groupName);
+        // Unknown legacy values remain readable and saveable. Configured
+        // groups, however, must use an active choice from the template.
+        return group && !group.choices.some((item) => item.active && item.name === choice);
+      })
+      .map(([groupName]) => groupName);
+    if (invalidCustomizations.length)
+      throw new AppError(
+        422,
+        "INVALID_CUSTOMIZATION",
+        "One or more customization choices are invalid.",
+        { groups: invalidCustomizations, templateId: line.templateId },
+      );
+    return {
+      ...line,
+      measurements: new Map(Object.entries(line.measurements)),
+      customizations: new Map(Object.entries(line.customizations)),
+      name: template.name,
+      unitPricePaise,
+      lineTotalPaise: unitPricePaise * line.quantity,
+    };
+  });
+}
+
+async function config(_req, res) {
+  res.json({ data: { maxFabricPhotosPerGarment } });
+}
 const orderInput = z.object({
   customerId: z.string(),
   lines: z.array(lineInput).min(1),
@@ -71,56 +167,7 @@ async function create(req, res) {
       "INVALID_DELIVERY_DATE",
       "Delivery date cannot be before the order date.",
     );
-  const templates = await GarmentTemplate.find({
-    _id: { $in: body.lines.map((x) => x.templateId) },
-    active: true,
-    $or: [
-      { scope: "global" },
-      { studioId: studio._id, scope: { $ne: "global" } },
-    ],
-  });
-  if (templates.length !== body.lines.length)
-    throw new AppError(
-      422,
-      "INVALID_GARMENT",
-      "One or more garment templates are unavailable.",
-    );
-  const prices = await Price.find({
-    studioId: studio._id,
-    templateId: { $in: templates.map((x) => x._id) },
-    active: true,
-  }).sort({ effectiveFrom: -1 });
-  const current = new Map();
-  prices.forEach((price) => {
-    if (!current.has(price.templateId.toString()))
-      current.set(price.templateId.toString(), price);
-  });
-  const missing = body.lines
-    .filter((line) => !current.has(line.templateId))
-    .map((line) => line.templateId);
-  if (missing.length)
-    throw new AppError(
-      422,
-      "ORDER_MISSING_PRICE",
-      "Set a price for every garment before creating an order.",
-      { templateIds: missing },
-    );
-  const templateMap = new Map(templates.map((x) => [x.id, x]));
-  const lines = body.lines.map((line) => {
-    const price = current.get(line.templateId),
-      template = templateMap.get(line.templateId);
-    return {
-      ...line,
-      // Nested Mongoose Map fields inside an embedded document can be cast to
-      // an empty map when assigned from a spread plain object. Constructing
-      // real Maps preserves every validated measurement/customization key.
-      measurements: new Map(Object.entries(line.measurements)),
-      customizations: new Map(Object.entries(line.customizations)),
-      name: template.name,
-      unitPricePaise: price.amountPaise,
-      lineTotalPaise: price.amountPaise * line.quantity,
-    };
-  });
+  const lines = await pricedOrderLines(studio._id, body.lines);
   const totalPaise = lines.reduce((sum, x) => sum + x.lineTotalPaise, 0);
   const sequence = (
     await require("../models").Studio.findOneAndUpdate(
@@ -212,6 +259,7 @@ async function update(req, res) {
       notes: z.string().max(5000).nullable().optional(),
       voiceMedia: z.string().nullable().optional(),
       referenceMedia: z.array(z.string()).max(20).optional(),
+      lines: z.array(lineInput).min(1).optional(),
     })
     .parse(req.body);
   const order = await Order.findOne({
@@ -239,7 +287,20 @@ async function update(req, res) {
       "INVALID_ORDER_DATES",
       "Trial and delivery dates cannot precede the order date.",
     );
-  Object.assign(order, body);
+  const { lines: inputLines, ...changes } = body;
+  Object.assign(order, changes);
+  if (inputLines) {
+    const existingPrices = new Map(
+      order.lines.map((line) => [line.templateId.toString(), line.unitPricePaise]),
+    );
+    const lines = await pricedOrderLines(
+      req.auth.studio._id,
+      inputLines,
+      existingPrices,
+    );
+    order.lines = lines;
+    order.totalPaise = lines.reduce((sum, line) => sum + line.lineTotalPaise, 0);
+  }
   order.activity.push({ type: "edited", actorId: req.auth.user._id });
   await order.save();
   workflowNotifications.orderUpdated(order, req.auth.user._id);
@@ -438,6 +499,7 @@ async function activity(req, res) {
   res.json({ data: order.activity });
 }
 module.exports = {
+  config,
   create,
   list,
   get,
