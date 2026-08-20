@@ -23,6 +23,10 @@ function dayKey(date = new Date()) {
   return new Date(date.getTime() + istOffsetMs).toISOString().slice(0, 10);
 }
 
+function istHour(date = new Date()) {
+  return new Date(date.getTime() + istOffsetMs).getUTCHours();
+}
+
 function notify(studioId, message) {
   return send(studioId, { ...message, source: "reminder" });
 }
@@ -156,8 +160,12 @@ async function runAccountReminders(now) {
 
 async function runReminders(now = new Date()) {
   await pruneStaleDevices(now);
+  // Reminder dates are calendar dates rather than timestamps. Do not wake
+  // users at midnight; once 08:00 IST has passed, recurring checks catch both
+  // newly-added reminders and same-day checks missed during API downtime.
+  if (istHour(now) < 8) return;
   await runOrderReminders(now);
   await runAccountReminders(now);
 }
 
-module.exports = { runReminders, istDay, dayKey };
+module.exports = { runReminders, istDay, dayKey, istHour };

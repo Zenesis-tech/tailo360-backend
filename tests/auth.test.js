@@ -582,6 +582,50 @@ test('notification history tracks unread state and supports admin targeting', as
   expect(count.body.data.count).toBe(0);
 });
 
+test('same-day order reminders are caught after 8 AM and remain deduplicated', async () => {
+  const account = await createAccount('+919876543234');
+  const { Customer, Notification, Order } = require('../src/models');
+  const { runReminders } = require('../src/services/reminder-jobs.service');
+  const studioId = account.body.data.studioId;
+  const customer = await Customer.create({
+    studioId,
+    name: 'Reminder Customer',
+    phone: '+919000000234',
+  });
+  const reminderDate = new Date('2026-08-21T00:00:00.000Z');
+  const order = await Order.create({
+    studioId,
+    customerId: customer._id,
+    code: 'REM-234',
+    orderDate: reminderDate,
+    reminderDate,
+    deliveryDate: new Date('2026-08-30T00:00:00.000Z'),
+    lines: [],
+    payments: [],
+    totalPaise: 0,
+  });
+
+  await runReminders(new Date('2026-08-21T01:30:00.000Z')); // 07:00 IST
+  expect(await Notification.countDocuments({
+    type: 'order_reminder',
+    'data.orderId': order.id,
+  })).toBe(0);
+
+  const afterEight = new Date('2026-08-21T04:00:00.000Z'); // 09:30 IST
+  await runReminders(afterEight);
+  await runReminders(afterEight);
+  const reminders = await Notification.find({
+    type: 'order_reminder',
+    'data.orderId': order.id,
+  });
+  expect(reminders).toHaveLength(1);
+  expect(reminders[0]).toMatchObject({
+    source: 'reminder',
+    title: 'Order reminder',
+    status: 'stored',
+  });
+});
+
 test('FCM device registration refreshes metadata and can be deactivated', async () => {
   const account = await createAccount('+919876543233');
   const token = `test-fcm-token-${'x'.repeat(40)}`;
