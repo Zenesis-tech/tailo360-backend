@@ -78,6 +78,107 @@ test('OTP provisions a studio and returns a usable token', async () => {
   expect(new Date(profile.body.data.subscription.trialEndsAt).getTime()).toBeGreaterThan(Date.now());
 });
 
+test('owners manage staff and staff OTP login resolves the assigned studio', async () => {
+  const owner = await createAccount('+919876543240');
+  const ownerToken = owner.body.data.accessToken;
+  const { Subscription } = require('../src/models');
+  await Subscription.updateOne(
+    { studioId: owner.body.data.studioId },
+    { seatLimit: 3 },
+  );
+
+  const created = await request(app)
+    .post('/api/v1/studio/members')
+    .set('Authorization', `Bearer ${ownerToken}`)
+    .send({
+      name: 'Meera Tailor',
+      phone: '+919000000240',
+      role: 'master_tailor',
+    })
+    .expect(201);
+  expect(created.body.data).toMatchObject({
+    name: 'Meera Tailor',
+    phone: '+919000000240',
+    role: 'master_tailor',
+    status: 'active',
+    linked: false,
+  });
+
+  const staffLogin = await createAccount('+919000000240');
+  expect(staffLogin.body.data).toMatchObject({
+    isNew: false,
+    needsOnboarding: false,
+    studioId: owner.body.data.studioId,
+    role: 'master_tailor',
+    user: { name: 'Meera Tailor', phone: '+919000000240' },
+  });
+  const staffToken = staffLogin.body.data.accessToken;
+  const staffProfile = await request(app)
+    .get('/api/v1/auth/me')
+    .set('Authorization', `Bearer ${staffToken}`)
+    .expect(200);
+  expect(staffProfile.body.data.membership).toMatchObject({
+    role: 'master_tailor',
+    status: 'active',
+    permissions: expect.arrayContaining(['orders:write', 'customers:write']),
+  });
+  await request(app)
+    .get('/api/v1/studio/members')
+    .set('Authorization', `Bearer ${staffToken}`)
+    .expect(403);
+
+  const ownerMembers = await request(app)
+    .get('/api/v1/studio/members')
+    .set('Authorization', `Bearer ${ownerToken}`)
+    .expect(200);
+  const currentStaff = ownerMembers.body.data.find(
+    (member) => member._id === created.body.data._id,
+  );
+
+  const paused = await request(app)
+    .patch(`/api/v1/studio/members/${created.body.data._id}`)
+    .set('Authorization', `Bearer ${ownerToken}`)
+    .send({ version: currentStaff.version, status: 'paused' })
+    .expect(200);
+  await request(app)
+    .get('/api/v1/dashboard')
+    .set('Authorization', `Bearer ${staffToken}`)
+    .expect(401);
+
+  const reactivated = await request(app)
+    .patch(`/api/v1/studio/members/${created.body.data._id}`)
+    .set('Authorization', `Bearer ${ownerToken}`)
+    .send({
+      version: paused.body.data.version,
+      name: 'Meera Front Desk',
+      role: 'front_desk',
+      status: 'active',
+    })
+    .expect(200);
+  const secondLogin = await createAccount('+919000000240');
+  expect(secondLogin.body.data).toMatchObject({
+    role: 'front_desk',
+    user: { name: 'Meera Front Desk' },
+  });
+
+  await request(app)
+    .delete(`/api/v1/studio/members/${created.body.data._id}`)
+    .set('Authorization', `Bearer ${ownerToken}`)
+    .expect(204);
+  await request(app)
+    .get('/api/v1/dashboard')
+    .set('Authorization', `Bearer ${secondLogin.body.data.accessToken}`)
+    .expect(401);
+
+  const members = await request(app)
+    .get('/api/v1/studio/members')
+    .set('Authorization', `Bearer ${ownerToken}`)
+    .expect(200);
+  expect(members.body.data.map((member) => member.role)).toEqual(['owner']);
+  expect(reactivated.body.data.status).toBe('active');
+  expect(reactivated.body.data.role).toBe('front_desk');
+});
+
 test('language preference persists and is returned by the authenticated profile', async () => {
   const verified = await createAccount('+919876543211');
   const authorization = `Bearer ${verified.body.data.accessToken}`;

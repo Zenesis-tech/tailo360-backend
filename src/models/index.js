@@ -92,6 +92,7 @@ const memberSchema = new Schema(
       index: true,
     },
     userId: { type: Schema.Types.ObjectId, ref: "User" },
+    name: { type: String, trim: true, default: "" },
     phone: { type: String, required: true },
     role: {
       type: String,

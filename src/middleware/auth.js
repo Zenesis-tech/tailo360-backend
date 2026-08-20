@@ -4,13 +4,46 @@ const { User, Member, Studio, Subscription, SubscriptionPlan, Customer, Order } 
 const { AppError } = require('../utils/errors');
 const { refreshSubscription } = require('../services/subscription-lifecycle.service');
 const permissionMatrix = {
-  owner: ['*'], master_tailor: ['customers:read', 'customers:write', 'orders:read', 'orders:write', 'orders:status', 'templates:read'], front_desk: ['customers:read', 'customers:write', 'orders:read', 'orders:write', 'orders:deliver', 'payments:read', 'payments:write'],
+  owner: ['*'],
+  master_tailor: [
+    'customers:read',
+    'customers:write',
+    'orders:read',
+    'orders:write',
+    'orders:status',
+    'templates:read',
+  ],
+  front_desk: [
+    'customers:read',
+    'customers:write',
+    'orders:read',
+    'orders:write',
+    'orders:status',
+    'templates:read',
+    'payments:read',
+    'payments:write',
+  ],
 };
+function permissionsFor(member) {
+  return member.permissionsOverride?.length
+    ? [...member.permissionsOverride]
+    : [...(permissionMatrix[member.role] || [])];
+}
 async function authenticateToken(token) {
   if (!token) throw new AppError(401, 'AUTH_REQUIRED', 'Authentication is required.');
   const payload = jwt.verify(token, env.JWT_ACCESS_SECRET);
-    const [user, member, studio, subscription] = await Promise.all([User.findById(payload.sub), Member.findById(payload.memberId), Studio.findById(payload.studioId), Subscription.findOne({ studioId: payload.studioId })]);
-    if (!user || !member || !studio || member.status === 'paused' || member.status === 'removed') throw new AppError(401, 'SESSION_INVALID', 'Your session is no longer valid.');
+    const [user, member, studio, subscription] = await Promise.all([
+      User.findOne({ _id: payload.sub, deletedAt: null }),
+      Member.findOne({
+        _id: payload.memberId,
+        userId: payload.sub,
+        studioId: payload.studioId,
+        status: { $in: ['active', 'limited'] },
+      }),
+      Studio.findById(payload.studioId),
+      Subscription.findOne({ studioId: payload.studioId }),
+    ]);
+    if (!user || !member || !studio) throw new AppError(401, 'SESSION_INVALID', 'Your session is no longer valid.');
   return { user, member, studio, subscription: await refreshSubscription(subscription) };
 }
 async function authenticate(req, res, next) {
@@ -22,7 +55,7 @@ async function authenticate(req, res, next) {
 }
 function authorize(permission) { return (req, res, next) => {
   const { member } = req.auth;
-  const granted = member.permissionsOverride?.length ? member.permissionsOverride : permissionMatrix[member.role] || [];
+  const granted = permissionsFor(member);
   if (member.status === 'limited' && !permission.endsWith(':read')) return next(new AppError(403, 'MEMBERSHIP_LIMITED', 'This membership is read-only.'));
   if (!granted.includes('*') && !granted.includes(permission)) return next(new AppError(403, 'FORBIDDEN', 'You do not have permission for this action.'));
   next();
@@ -46,4 +79,4 @@ function requirePlatformAdmin(req, res, next) {
   if (req.auth.user.platformRole !== 'admin') return next(new AppError(403, 'PLATFORM_ADMIN_REQUIRED', 'Platform-admin access is required.'));
   next();
 }
-module.exports = { authenticateToken, authenticate, authorize, requireWritableSubscription, requirePlatformAdmin };
+module.exports = { authenticateToken, authenticate, authorize, permissionsFor, requireWritableSubscription, requirePlatformAdmin };

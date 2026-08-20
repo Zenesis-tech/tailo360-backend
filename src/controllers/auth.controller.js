@@ -21,8 +21,40 @@ async function verifyOtp(req, res) {
 }
 async function finishPhoneAuthentication(phone, input, res) {
   let user = await User.findOne({ phone }); let isNew = false; let member; let studio;
-  if (!user) { user = await User.create({ phone }); ({ studio, owner: member } = await createStudioFor(user, input)); isNew = true; } else { member = await Member.findOne({ userId: user._id, status: { $in: ['active', 'limited'] } }); if (!member) throw new AppError(403, 'NO_ACTIVE_STUDIO', 'This account has no active studio membership.'); studio = await Studio.findById(member.studioId); }
-  const needsOnboarding = isNew || (!studio.onboardingCompletedAt && studio.name === 'My Studio');
+  if (user) {
+    member = await Member.findOne({ userId: user._id, status: { $in: ['active', 'limited'] } });
+    if (!member) {
+      member = await Member.findOne({ phone, userId: null, status: { $in: ['active', 'limited'] } });
+      if (member) {
+        member.userId = user._id;
+        if (!member.name && user.name) member.name = user.name;
+        await member.save();
+      }
+    }
+    if (!member) throw new AppError(403, 'NO_ACTIVE_STUDIO', 'This account has no active studio membership.');
+    studio = await Studio.findById(member.studioId);
+  } else {
+    const existingMembership = await Member.findOne({ phone, status: { $ne: 'removed' } });
+    if (existingMembership) {
+      if (!['active', 'limited'].includes(existingMembership.status)) {
+        throw new AppError(403, 'NO_ACTIVE_STUDIO', 'This staff account is inactive. Ask the studio owner to reactivate it.');
+      }
+      if (existingMembership.userId) {
+        throw new AppError(409, 'STAFF_LOGIN_IDENTITY_MISMATCH', 'This staff login is linked to another mobile identity.');
+      }
+      user = await User.create({ phone, name: existingMembership.name || undefined });
+      existingMembership.userId = user._id;
+      await existingMembership.save();
+      member = existingMembership;
+      studio = await Studio.findById(member.studioId);
+    } else {
+      user = await User.create({ phone });
+      ({ studio, owner: member } = await createStudioFor(user, input));
+      isNew = true;
+    }
+  }
+  const needsOnboarding = member.role === 'owner'
+    && (isNew || (!studio.onboardingCompletedAt && studio.name === 'My Studio'));
   const tokens = await issueSession(user, member); res.json({ data: { ...tokens, isNew, needsOnboarding, user: { id: user.id, phone: user.phone, name: user.name, language: user.language }, studioId: member.studioId, role: member.role } });
 }
 async function firebasePhone(req, res) {
@@ -80,7 +112,7 @@ async function refresh(req, res) {
   res.json({ data: tokens });
 }
 async function logout(req, res) { const token = req.body.refreshToken; if (token) { try { const payload = jwt.verify(token, env.JWT_REFRESH_SECRET); await Session.updateOne({ tokenId: payload.tokenId }, { revokedAt: new Date() }); } catch (_) {} } res.status(204).send(); }
-function me(req, res) { const { user, member, studio, subscription } = req.auth; res.json({ data: { user: { id: user.id, phone: user.phone, email: user.email, name: user.name, platformRole: user.platformRole, language: user.language }, membership: { id: member.id, role: member.role, status: member.status }, studio, subscription } }); }
+function me(req, res) { const { user, member, studio, subscription } = req.auth; const { permissionsFor } = require('../middleware/auth'); res.json({ data: { user: { id: user.id, phone: user.phone, email: user.email, name: user.name, platformRole: user.platformRole, language: user.language }, membership: { id: member.id, role: member.role, status: member.status, permissions: permissionsFor(member) }, studio, subscription } }); }
 async function updatePreferences(req, res) {
   const input = z.object({ language: z.enum(['en', 'hi', 'gu', 'mr']) }).parse(req.body);
   req.auth.user.language = input.language;

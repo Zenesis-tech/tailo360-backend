@@ -95,6 +95,7 @@ async function dashboard(req, res) {
     data: {
       userName: req.auth.user.name || '',
       studioName: req.auth.studio.name,
+      role: req.auth.member.role,
       notificationCount,
       todayCollectedPaise: sumCollections(dayStart, dayEnd),
       monthCollectedPaise: sumCollections(monthStart, dayEnd),

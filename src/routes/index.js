@@ -27,6 +27,7 @@ const subscriptions = wrapController(subscriptionController);
 const admin = wrapController(require("../controllers/admin.controller"));
 const backups = wrapController(require("../controllers/backup.controller"));
 const studioExport = wrapController(require("../controllers/studio-export.controller"));
+const staff = wrapController(require("../controllers/staff.controller"));
 const authMiddleware = require("../middleware/auth");
 const authenticate = authMiddleware.authenticate;
 const authorize = authMiddleware.authorize;
@@ -73,7 +74,28 @@ router.get(
   "/studio/members",
   authenticate,
   authorize("staff:read"),
-  ops.members,
+  staff.list,
+);
+router.post(
+  "/studio/members",
+  authenticate,
+  authorize("staff:write"),
+  requireWritableSubscription,
+  staff.create,
+);
+router.patch(
+  "/studio/members/:id",
+  authenticate,
+  authorize("staff:write"),
+  requireWritableSubscription,
+  staff.update,
+);
+router.delete(
+  "/studio/members/:id",
+  authenticate,
+  authorize("staff:write"),
+  requireWritableSubscription,
+  staff.remove,
 );
 router.get(
   "/customers",
