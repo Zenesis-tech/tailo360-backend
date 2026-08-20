@@ -1,7 +1,12 @@
 jest.mock("firebase-admin", () => ({ apps: [] }));
-jest.mock("../src/config/env", () => ({ FIREBASE_SERVICE_ACCOUNT_JSON: "" }));
+const mockEnv = {
+  FIREBASE_SERVICE_ACCOUNT_JSON: "",
+  FIREBASE_SERVICE_ACCOUNT_BASE64: "",
+};
+jest.mock("../src/config/env", () => mockEnv);
 
 const {
+  firebaseServiceAccountValue,
   parseFirebaseServiceAccount,
 } = require("../src/services/firebase-admin.service");
 
@@ -37,4 +42,17 @@ test("rejects incomplete service-account credentials", () => {
   expect(() =>
     parseFirebaseServiceAccount(JSON.stringify({ project_id: "test" })),
   ).toThrow("missing client_email");
+});
+
+test("decodes a Base64 service-account secret without dashboard escaping", () => {
+  const json = JSON.stringify(account);
+  mockEnv.FIREBASE_SERVICE_ACCOUNT_JSON = "not-used";
+  mockEnv.FIREBASE_SERVICE_ACCOUNT_BASE64 = Buffer.from(json).toString(
+    "base64",
+  );
+  expect(parseFirebaseServiceAccount(firebaseServiceAccountValue())).toMatchObject(
+    account,
+  );
+  mockEnv.FIREBASE_SERVICE_ACCOUNT_JSON = "";
+  mockEnv.FIREBASE_SERVICE_ACCOUNT_BASE64 = "";
 });

@@ -4,6 +4,17 @@ const { AppError } = require('../utils/errors');
 
 let initialized = false;
 
+function firebaseServiceAccountValue() {
+  if (!env.FIREBASE_SERVICE_ACCOUNT_BASE64) {
+    return env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  }
+  const encoded = env.FIREBASE_SERVICE_ACCOUNT_BASE64.replace(/\s/g, "");
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) {
+    throw new Error("Firebase service-account Base64 is malformed.");
+  }
+  return Buffer.from(encoded, "base64").toString("utf8");
+}
+
 function parseFirebaseServiceAccount(raw) {
   let value = raw.trim();
   let parsed;
@@ -15,7 +26,7 @@ function parseFirebaseServiceAccount(raw) {
       // into literal line breaks. Repair only that JSON field, leaving normal
       // formatting whitespace untouched.
       const repaired = value.replace(
-        /("private_key"\s*:\s*")([\s\S]*?)("\s*,)/,
+        /("private_key"\s*:\s*")([\s\S]*?)("\s*(?:,|}))/,
         (_match, prefix, key, suffix) =>
           `${prefix}${key.replace(/\r?\n/g, "\\n")}${suffix}`,
       );
@@ -47,7 +58,10 @@ function parseFirebaseServiceAccount(raw) {
 }
 
 function firebaseAdmin({ required = false } = {}) {
-  if (!env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+  if (
+    !env.FIREBASE_SERVICE_ACCOUNT_JSON &&
+    !env.FIREBASE_SERVICE_ACCOUNT_BASE64
+  ) {
     if (required) {
       throw new AppError(
         503,
@@ -61,7 +75,7 @@ function firebaseAdmin({ required = false } = {}) {
     try {
       if (!admin.apps.length) {
         const serviceAccount = parseFirebaseServiceAccount(
-          env.FIREBASE_SERVICE_ACCOUNT_JSON,
+          firebaseServiceAccountValue(),
         );
         admin.initializeApp({
           credential: admin.credential.cert(serviceAccount),
@@ -84,4 +98,8 @@ function firebaseAdmin({ required = false } = {}) {
   return admin;
 }
 
-module.exports = { firebaseAdmin, parseFirebaseServiceAccount };
+module.exports = {
+  firebaseAdmin,
+  parseFirebaseServiceAccount,
+  firebaseServiceAccountValue,
+};

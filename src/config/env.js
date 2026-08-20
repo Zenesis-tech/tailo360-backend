@@ -38,6 +38,7 @@ const schema = z.object({
   BACKUP_R2_BUCKET: z.string().trim().default(''),
   GOOGLE_CLIENT_IDS: z.string().default(''),
   FIREBASE_SERVICE_ACCOUNT_JSON: z.string().default(''),
+  FIREBASE_SERVICE_ACCOUNT_BASE64: z.string().trim().default(''),
   REMINDER_CRON: z.string().trim().min(1).default('*/5 * * * *'),
   REMINDER_TIMEZONE: z.string().trim().min(1).default('Asia/Kolkata'),
   GOOGLE_PLAY_PACKAGE_NAME: z.string().default(''),
