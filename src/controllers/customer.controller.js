@@ -202,8 +202,63 @@ async function measurements(req, res) {
   for (const row of rows)
     if (!currentByTemplate.has(row.templateId.toString()))
       currentByTemplate.set(row.templateId.toString(), row);
+
+  // Measurements entered while creating an order predate the reusable
+  // customer-profile records in some studios. Treat the newest non-empty
+  // order line as the current size when no explicit profile exists for that
+  // garment. This keeps returning clients' sizes available without replacing
+  // a profile that was deliberately saved or edited later.
+  const orders = await Order.find({
+    studioId: req.auth.studio._id,
+    customerId: req.params.id,
+    deletedAt: null,
+  })
+    .select("lines createdAt updatedAt")
+    .sort({ createdAt: -1, _id: -1 });
+  const orderMeasurements = [];
+  const orderTemplateIds = new Set();
+  for (const order of orders) {
+    for (const line of order.lines) {
+      const templateId = line.templateId?.toString();
+      const rawValues = line.measurements instanceof Map
+        ? Object.fromEntries(line.measurements)
+        : line.measurements || {};
+      const values = Object.fromEntries(
+        Object.entries(rawValues).map(([name, value]) => [
+          name,
+          String(value).trim().replace(/\s*(in|cm)\s*$/i, ""),
+        ]),
+      );
+      if (
+        !templateId ||
+        currentByTemplate.has(templateId) ||
+        orderTemplateIds.has(templateId) ||
+        !Object.values(values).some((value) => String(value).trim())
+      ) {
+        continue;
+      }
+      orderTemplateIds.add(templateId);
+      orderMeasurements.push({
+        _id: line._id,
+        templateId: line.templateId,
+        version: 1,
+        values,
+        customizations:
+          line.customizations instanceof Map
+            ? Object.fromEntries(line.customizations)
+            : line.customizations || {},
+        unit: Object.values(rawValues).some((value) => /\bcm\s*$/i.test(String(value)))
+          ? "cm"
+          : "in",
+        createdAt: order.updatedAt || order.createdAt,
+        updatedAt: order.updatedAt || order.createdAt,
+        source: "order",
+      });
+    }
+  }
+  const currentRows = [...currentByTemplate.values(), ...orderMeasurements];
   const templates = await GarmentTemplate.find({
-    _id: { $in: [...currentByTemplate.values()].map((row) => row.templateId) },
+    _id: { $in: currentRows.map((row) => row.templateId) },
     $or: [
       { scope: "global" },
       { studioId: req.auth.studio._id, scope: { $ne: "global" } },
@@ -213,8 +268,8 @@ async function measurements(req, res) {
     templates.map((template) => [template.id, template]),
   );
   res.json({
-    data: [...currentByTemplate.values()].map((row) => ({
-      ...serializeMeasurement(row),
+    data: currentRows.map((row) => ({
+      ...(row.source === "order" ? row : serializeMeasurement(row)),
       template: templateById.get(row.templateId.toString()),
     })),
   });

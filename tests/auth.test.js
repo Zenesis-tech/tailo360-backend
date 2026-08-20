@@ -214,6 +214,7 @@ test('dashboard returns backend-derived empty metrics for a new studio', async (
   expect(response.body.data).toMatchObject({
     studioName: 'Needle & Thread',
     todayCollectedPaise: 0,
+    monthCollectedPaise: 0,
     collectedPaise: 0,
     pendingPaise: 0,
     overduePaise: 0,
@@ -412,6 +413,12 @@ test('cash recorded through the payment endpoint appears in net collections', as
     netProfitPaise: 7000,
     paymentMethods: { cash: 7000 },
   });
+
+  const dashboard = await request(app)
+    .get('/api/v1/dashboard')
+    .set('Authorization', `Bearer ${verified.body.data.accessToken}`)
+    .expect(200);
+  expect(dashboard.body.data.monthCollectedPaise).toBe(7000);
 });
 
 test('notification history tracks unread state and supports admin targeting', async () => {
@@ -812,6 +819,12 @@ test('order creation persists per-garment measurements', async () => {
   });
   expect(detail.body.data.priority).toBe('urgent');
 
+  const profilesAfterOrder = await request(app)
+    .get(`/api/v1/customers/${customer.id}/measurements`)
+    .set('Authorization', `Bearer ${token}`)
+    .expect(200);
+  expect(profilesAfterOrder.body.data[0].values).toEqual(profileValues);
+
   await Order.updateOne(
     { _id: stored._id },
     { createdAt: new Date(Date.now() - 86400000) },
@@ -839,6 +852,42 @@ test('order creation persists per-garment measurements', async () => {
     .set('Authorization', `Bearer ${token}`)
     .expect(200);
   expect(latestFirst.body.data[0]._id).toBe(newer.id);
+
+  const returningCustomer = await Customer.create({
+    studioId: verified.body.data.studioId,
+    name: 'Returning Order Client',
+    phone: '+919000000221',
+  });
+  await Order.create({
+    studioId: verified.body.data.studioId,
+    customerId: returningCustomer.id,
+    code: 'RETURNING-ORDER',
+    status: 'delivered',
+    orderDate: new Date(),
+    deliveryDate: new Date(),
+    totalPaise: 180000,
+    lines: [{
+      templateId: kurti._id,
+      name: 'Kurti',
+      quantity: 1,
+      unitPricePaise: 180000,
+      lineTotalPaise: 180000,
+      measurements: { Bust: '39', Waist: '35' },
+      customizations: {},
+      measurementSource: 'fresh',
+    }],
+  });
+  const measurementsFromOrder = await request(app)
+    .get(`/api/v1/customers/${returningCustomer.id}/measurements`)
+    .set('Authorization', `Bearer ${token}`)
+    .expect(200);
+  expect(measurementsFromOrder.body.data).toHaveLength(1);
+  expect(measurementsFromOrder.body.data[0]).toMatchObject({
+    templateId: kurti._id,
+    values: { Bust: '39', Waist: '35' },
+    source: 'order',
+    template: { name: 'Kurti' },
+  });
 });
 
 test('subscription products are filtered for the requesting store', async () => {

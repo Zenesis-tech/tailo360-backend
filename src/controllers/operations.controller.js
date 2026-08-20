@@ -97,6 +97,7 @@ async function dashboard(req, res) {
       studioName: req.auth.studio.name,
       notificationCount,
       todayCollectedPaise: sumCollections(dayStart, dayEnd),
+      monthCollectedPaise: sumCollections(monthStart, dayEnd),
       collectedPaise: sumCollections(monthStart, dayEnd),
       pendingPaise,
       overduePaise,
