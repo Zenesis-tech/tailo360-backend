@@ -56,3 +56,18 @@ test("decodes a Base64 service-account secret without dashboard escaping", () =>
   mockEnv.FIREBASE_SERVICE_ACCOUNT_JSON = "";
   mockEnv.FIREBASE_SERVICE_ACCOUNT_BASE64 = "";
 });
+
+test.each([
+  (encoded) => `"${encoded}"`,
+  (encoded) => `'${encoded}'`,
+  (encoded) => `\\${encoded}`,
+  (encoded) => `${encoded.slice(0, 80)}\n${encoded.slice(80)}`,
+])("normalizes harmless Base64 formatting added by a host", (decorate) => {
+  const json = JSON.stringify(account);
+  const encoded = Buffer.from(json).toString("base64");
+  mockEnv.FIREBASE_SERVICE_ACCOUNT_BASE64 = decorate(encoded);
+  expect(parseFirebaseServiceAccount(firebaseServiceAccountValue())).toMatchObject(
+    account,
+  );
+  mockEnv.FIREBASE_SERVICE_ACCOUNT_BASE64 = "";
+});

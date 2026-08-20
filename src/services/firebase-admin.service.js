@@ -8,7 +8,14 @@ function firebaseServiceAccountValue() {
   if (!env.FIREBASE_SERVICE_ACCOUNT_BASE64) {
     return env.FIREBASE_SERVICE_ACCOUNT_JSON;
   }
-  const encoded = env.FIREBASE_SERVICE_ACCOUNT_BASE64.replace(/\s/g, "");
+  // Environment dashboards sometimes wrap copied values in quotes, prefix
+  // them with a backslash, or insert visual line breaks. None of those
+  // characters are part of standard Base64, so they can be removed safely.
+  const encoded = env.FIREBASE_SERVICE_ACCOUNT_BASE64
+    .trim()
+    .replace(/[\s\\'\"]/g, "")
+    .replace(/-/g, "+")
+    .replace(/_/g, "/");
   if (!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) {
     throw new Error("Firebase service-account Base64 is malformed.");
   }
