@@ -18,10 +18,10 @@ function firebaseAdmin({ required = false } = {}) {
   if (!initialized) {
     try {
       if (!admin.apps.length) {
+        const serviceAccount = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT_JSON);
         admin.initializeApp({
-          credential: admin.credential.cert(
-            JSON.parse(env.FIREBASE_SERVICE_ACCOUNT_JSON),
-          ),
+          credential: admin.credential.cert(serviceAccount),
+          projectId: serviceAccount.project_id,
         });
       }
       initialized = true;

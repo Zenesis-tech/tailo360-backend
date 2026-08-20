@@ -13,6 +13,7 @@ const { MongoMemoryServer } = require('mongodb-memory-server');
 let mongo;
 let app;
 let mongoose;
+let mockVerifyFirebaseIdToken;
 
 beforeAll(async () => {
   mongo = await MongoMemoryServer.create();
@@ -30,17 +31,18 @@ beforeAll(async () => {
     getObject: jest.fn(async () => null),
     deletePrefix: jest.fn(async () => ({})),
   }));
+  mockVerifyFirebaseIdToken = jest.fn(async (token) => {
+    if (token.startsWith('invalid')) throw new Error('invalid token');
+    return {
+      uid: 'firebase-phone-user',
+      phone_number: '+919876543299',
+      firebase: { sign_in_provider: 'phone' },
+    };
+  });
   jest.doMock('../src/services/firebase-admin.service', () => ({
     firebaseAdmin: jest.fn(() => ({
       auth: () => ({
-        verifyIdToken: jest.fn(async (token) => {
-          if (token.startsWith('invalid')) throw new Error('invalid token');
-          return {
-            uid: 'firebase-phone-user',
-            phone_number: '+919876543299',
-            firebase: { sign_in_provider: 'phone' },
-          };
-        }),
+        verifyIdToken: mockVerifyFirebaseIdToken,
       }),
       messaging: () => ({ sendEachForMulticast: jest.fn() }),
     })),
@@ -220,6 +222,9 @@ test('Firebase phone ID token provisions a normal Tailo360 session', async () =>
     expect(verified.body.data.user.phone).toBe('+919876543299');
     expect(verified.body.data.accessToken).toBeTruthy();
     expect(verified.body.data.refreshToken).toBeTruthy();
+    expect(mockVerifyFirebaseIdToken).toHaveBeenLastCalledWith(
+      `valid-${'x'.repeat(120)}`,
+    );
 
     await request(app)
       .post('/api/v1/auth/firebase/phone')

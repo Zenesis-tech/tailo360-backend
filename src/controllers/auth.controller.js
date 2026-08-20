@@ -62,7 +62,11 @@ async function firebasePhone(req, res) {
   const input = z.object({ idToken: z.string().min(100).max(10000) }).parse(req.body);
   let decoded;
   try {
-    decoded = await firebaseAdmin({ required: true }).auth().verifyIdToken(input.idToken, true);
+    // Signature, issuer, audience and expiry validation are sufficient here.
+    // `checkRevoked: true` additionally calls the Firebase user API and can
+    // reject a valid OTP token when the service account cannot mint an OAuth
+    // access token (reported misleadingly as an invalid credential).
+    decoded = await firebaseAdmin({ required: true }).auth().verifyIdToken(input.idToken);
   } catch (error) {
     if (error instanceof AppError) throw error;
     throw new AppError(401, 'FIREBASE_TOKEN_INVALID', 'Firebase phone verification is invalid or expired.');
