@@ -4,6 +4,7 @@ process.env.JWT_ACCESS_SECRET = 'a-very-long-test-access-secret-that-is-at-least
 process.env.JWT_REFRESH_SECRET = 'a-very-long-test-refresh-secret-that-is-at-least-32';
 process.env.EXPOSE_DEV_OTP = 'true';
 process.env.OTP_DELIVERY_MODE = 'development';
+process.env.PHONE_AUTH_MODE = 'server';
 process.env.BACKUP_ENCRYPTION_KEY = Buffer.alloc(32, 9).toString('base64');
 process.env.BACKUP_R2_BUCKET = 'backup-test';
 
@@ -179,6 +180,40 @@ test('owners manage staff and staff OTP login resolves the assigned studio', asy
   expect(members.body.data.map((member) => member.role)).toEqual(['owner']);
   expect(reactivated.body.data.status).toBe('active');
   expect(reactivated.body.data.role).toBe('front_desk');
+});
+
+test('staff plans exclude the owner and limit only active staff members', async () => {
+  const owner = await createAccount('+919876543250');
+  const authorization = `Bearer ${owner.body.data.accessToken}`;
+
+  for (const [index, role] of ['master_tailor', 'front_desk'].entries()) {
+    await request(app)
+      .post('/api/v1/studio/members')
+      .set('Authorization', authorization)
+      .send({
+        name: `Staff Member ${index + 1}`,
+        phone: `+91900000025${index}`,
+        role,
+      })
+      .expect(201);
+  }
+
+  const rejected = await request(app)
+    .post('/api/v1/studio/members')
+    .set('Authorization', authorization)
+    .send({
+      name: 'Staff Member 3',
+      phone: '+919000000252',
+      role: 'front_desk',
+    })
+    .expect(403);
+  expect(rejected.body.error.code).toBe('STAFF_LIMIT_REACHED');
+
+  const usage = await request(app)
+    .get('/api/v1/subscription/usage')
+    .set('Authorization', authorization)
+    .expect(200);
+  expect(usage.body.data).toEqual({ staff: 2, limits: { staffSeats: 2 } });
 });
 
 test('language preference persists and is returned by the authenticated profile', async () => {
@@ -891,12 +926,12 @@ test('order creation persists per-garment measurements', async () => {
     { code: 'starter' },
     {
       code: 'starter',
-      name: 'Starter',
+      name: '2 Staff',
       active: true,
       trialDays: 14,
-      monthlyPricePaise: 29900,
-      yearlyPricePaise: 299000,
-      limits: { customers: 80, ordersPerMonth: 150, staffSeats: 1 },
+      monthlyPricePaise: 4900,
+      yearlyPricePaise: 47040,
+      limits: { customers: -1, ordersPerMonth: -1, staffSeats: 2 },
       features: [],
     },
     { upsert: true, new: true },
@@ -1043,30 +1078,30 @@ test('order creation persists per-garment measurements', async () => {
 test('subscription products are filtered for the requesting store', async () => {
   const verified = await createAccount('+919876543214');
   const { SubscriptionPlan } = require('../src/models');
-  await SubscriptionPlan.create({
-    code: 'pro',
-    name: 'Pro',
+  await SubscriptionPlan.findOneAndUpdate({ code: 'studio' }, {
+    code: 'studio',
+    name: '5 Staff',
     active: true,
     trialDays: 14,
-    monthlyPricePaise: 69900,
-    yearlyPricePaise: 699000,
-    limits: { customers: -1, ordersPerMonth: -1, staffSeats: 1 },
+    monthlyPricePaise: 9900,
+    yearlyPricePaise: 95040,
+    limits: { customers: -1, ordersPerMonth: -1, staffSeats: 5 },
     features: ['Reports'],
     storeProducts: [
       {
         platform: 'google',
-        productId: 'tailo360_pro_monthly',
+        productId: 'tailo360_5_staff_monthly',
         period: 'monthly',
         active: true,
       },
       {
         platform: 'apple',
-        productId: 'tailo360.pro.monthly',
+        productId: 'tailo360.5staff.monthly',
         period: 'monthly',
         active: true,
       },
     ],
-  });
+  }, { upsert: true, new: true });
 
   const response = await request(app)
     .get('/api/v1/subscription/products?platform=google')
@@ -1074,9 +1109,9 @@ test('subscription products are filtered for the requesting store', async () => 
     .expect(200);
   expect(response.body.data).toEqual([
     expect.objectContaining({
-      id: 'tailo360_pro_monthly',
+      id: 'tailo360_5_staff_monthly',
       platform: 'google',
-      plan: 'pro',
+      plan: 'studio',
       period: 'monthly',
     }),
   ]);
@@ -1093,12 +1128,12 @@ test('platform admin can grant expiring test access without a store product', as
     { code: 'starter' },
     {
       code: 'starter',
-      name: 'Starter',
+      name: '2 Staff',
       active: true,
       trialDays: 14,
-      monthlyPricePaise: 29900,
-      yearlyPricePaise: 299000,
-      limits: { customers: 80, ordersPerMonth: 150, staffSeats: 1 },
+      monthlyPricePaise: 4900,
+      yearlyPricePaise: 47040,
+      limits: { customers: -1, ordersPerMonth: -1, staffSeats: 2 },
       features: ['Basic profiles'],
       storeProducts: [],
     },
@@ -1118,7 +1153,7 @@ test('platform admin can grant expiring test access without a store product', as
     plan: 'starter',
     status: 'active',
     entitlementSource: 'admin_test',
-    seatLimit: 1,
+    seatLimit: 2,
     adminGrant: { note: 'Automated QA' },
   });
   expect(new Date(response.body.data.periodEndsAt).getTime()).toBeGreaterThan(

@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken');
 const env = require('../config/env');
-const { User, Member, Studio, Subscription, SubscriptionPlan, Customer, Order } = require('../models');
+const { User, Member, Studio, Subscription, SubscriptionPlan } = require('../models');
 const { AppError } = require('../utils/errors');
 const { refreshSubscription } = require('../services/subscription-lifecycle.service');
 const permissionMatrix = {
@@ -62,17 +62,9 @@ function authorize(permission) { return (req, res, next) => {
 }; }
 async function requireWritableSubscription(req, res, next) {
   const subscription = req.auth.subscription;
-  if (['restricted', 'expired', 'cancelled'].includes(subscription?.status)) return next(new AppError(403, 'SUBSCRIPTION_RESTRICTED', 'Your subscription does not allow new records.'));
+  if (['restricted', 'expired'].includes(subscription?.status)) return next(new AppError(403, 'SUBSCRIPTION_RESTRICTED', 'Your subscription does not allow new records.'));
   const plan = await SubscriptionPlan.findOne({ code: subscription?.plan, active: true });
   if (!plan) return next(new AppError(403, 'PLAN_UNAVAILABLE', 'The current subscription plan is unavailable.'));
-  if (req.path === '/customers' && plan.limits.customers >= 0) {
-    const count = await Customer.countDocuments({ studioId: req.auth.studio._id, deletedAt: null });
-    if (count >= plan.limits.customers) return next(new AppError(403, 'CUSTOMER_LIMIT_REACHED', 'This plan has reached its customer limit.'));
-  }
-  if (req.path === '/orders' && plan.limits.ordersPerMonth >= 0) {
-    const now = new Date(); const count = await Order.countDocuments({ studioId: req.auth.studio._id, createdAt: { $gte: new Date(now.getFullYear(), now.getMonth(), 1) }, deletedAt: null });
-    if (count >= plan.limits.ordersPerMonth) return next(new AppError(403, 'ORDER_LIMIT_REACHED', 'This plan has reached its monthly order limit.'));
-  }
   return next();
 }
 function requirePlatformAdmin(req, res, next) {

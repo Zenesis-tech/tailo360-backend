@@ -31,6 +31,11 @@ async function refreshSubscription(subscription) {
       dedupeKey: `subscription:${subscription.id}:restricted`,
     }).catch(console.error);
   }
+  if (subscription.status === 'cancelled' && (!subscription.periodEndsAt || subscription.periodEndsAt <= now)) {
+    subscription.status = 'restricted';
+    await subscription.save();
+    await realtimeEvents.publish(subscription.studioId, { resource: 'subscription', action: 'updated', id: subscription.id, data: subscription });
+  }
   return subscription;
 }
 

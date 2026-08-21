@@ -8,14 +8,14 @@ const { rewardReferralForStudio } = require('./subscription-lifecycle.service');
 const referralId = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ', 7);
 const starterPlanDefaults = {
   code: 'starter',
-  name: 'Starter',
-  description: 'Simple order and customer tracking.',
+  name: '2 Staff',
+  description: 'Everything your studio needs, with access for 2 staff members.',
   active: true,
   trialDays: 14,
-  monthlyPricePaise: 29900,
-  yearlyPricePaise: 299000,
-  limits: { customers: 80, ordersPerMonth: 150, staffSeats: 1 },
-  features: ['Basic measurement profiles', 'Delivery reminders'],
+  monthlyPricePaise: 4900,
+  yearlyPricePaise: 47040,
+  limits: { customers: -1, ordersPerMonth: -1, staffSeats: 2 },
+  features: ['2 staff members', 'Unlimited clients and orders', 'Measurements and reminders', 'Payments and reports'],
   storeProducts: [],
 };
 const hash = (value) => crypto.createHash('sha256').update(value).digest('hex');
@@ -34,7 +34,7 @@ async function createStudioFor(user, { studioName, referralCode, garmentAudience
     { upsert: true, new: true, setDefaultsOnInsert: true },
   );
   const trialDays = starter?.trialDays ?? 14;
-  await Subscription.create({ studioId: studio._id, status: 'trial', plan: 'starter', entitlementSource: 'trial', trialEndsAt: new Date(Date.now() + trialDays * 86400000), seatLimit: starter?.limits.staffSeats ?? 1 });
+  await Subscription.create({ studioId: studio._id, status: 'trial', plan: 'starter', entitlementSource: 'trial', trialEndsAt: new Date(Date.now() + trialDays * 86400000), seatLimit: starter?.limits.staffSeats ?? 2 });
   await provisionStarterGarments(studio._id, audiences);
   if (referralCode) {
     const referrer = await Studio.findOne({ referralCode: referralCode.toUpperCase() });

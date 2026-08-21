@@ -70,6 +70,7 @@ async function assertSeatAvailable(req) {
   if (limit == null || limit < 0) return;
   const occupied = await Member.countDocuments({
     studioId: req.auth.studio._id,
+    role: { $ne: "owner" },
     status: { $in: ["active", "limited"] },
   });
   if (occupied >= limit) {

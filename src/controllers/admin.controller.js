@@ -339,7 +339,7 @@ async function subscriptions(req, res) {
 async function updateSubscription(req, res) {
   const input = z
     .object({
-      plan: z.enum(["starter", "pro", "studio"]).optional(),
+      plan: z.enum(["starter", "studio"]).optional(),
       status: z
         .enum([
           "trial",
@@ -413,7 +413,7 @@ async function updateSubscription(req, res) {
 async function grantTestSubscription(req, res) {
   const input = z
     .object({
-      plan: z.enum(["starter", "pro", "studio"]),
+      plan: z.enum(["starter", "studio"]),
       durationDays: z.number().int().min(1).max(365).default(30),
       note: z.string().trim().max(200).optional(),
     })

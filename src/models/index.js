@@ -390,7 +390,7 @@ const subscriptionSchema = new Schema(
     originalTransactionId: String,
     trialEndsAt: Date,
     periodEndsAt: Date,
-    seatLimit: { type: Number, default: 1 },
+    seatLimit: { type: Number, default: 2 },
     referralCreditPaise: { type: Number, default: 0, min: 0 },
     lastVerifiedAt: Date,
   },
