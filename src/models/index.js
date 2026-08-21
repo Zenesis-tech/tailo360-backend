@@ -424,6 +424,15 @@ const subscriptionPlanSchema = new Schema(
         active: { type: Boolean, default: true },
       },
     ],
+    // Kept for validating renewals/webhooks from retired products. These are
+    // deliberately not returned by the purchasable-products endpoint.
+    legacyStoreProducts: [
+      {
+        platform: { type: String, enum: ["google", "apple"], required: true },
+        productId: { type: String, required: true },
+        period: { type: String, enum: ["monthly", "yearly"], required: true },
+      },
+    ],
   },
   base,
 );

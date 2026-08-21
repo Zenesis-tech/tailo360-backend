@@ -5,8 +5,10 @@ const env = require("./config/env");
 const { safeError } = require("./utils/logging");
 const http = require("http");
 const realtimeEvents = require("./services/realtime-events.service");
+const { syncSubscriptionPlans } = require("./services/subscription-plan-catalog.service");
 connectDatabase()
-  .then(() => {
+  .then(async () => {
+    await syncSubscriptionPlans();
     startJobs();
     const server = http.createServer(app);
     realtimeEvents.initialize(server);

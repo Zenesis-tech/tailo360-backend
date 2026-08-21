@@ -10,7 +10,13 @@ function decodeJwsPayload(value) {
   return JSON.parse(Buffer.from(part, 'base64url').toString('utf8'));
 }
 async function planFor(productId, platform) {
-  const plan = await SubscriptionPlan.findOne({ active: true, storeProducts: { $elemMatch: { productId, platform, active: true } } });
+  const plan = await SubscriptionPlan.findOne({
+    active: true,
+    $or: [
+      { storeProducts: { $elemMatch: { productId, platform, active: true } } },
+      { legacyStoreProducts: { $elemMatch: { productId, platform } } },
+    ],
+  });
   if (!plan) throw new AppError(422, 'UNKNOWN_SUBSCRIPTION_PRODUCT', 'This subscription product is not enabled in the backend catalog.');
   return plan;
 }

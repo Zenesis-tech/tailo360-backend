@@ -1117,6 +1117,59 @@ test('subscription products are filtered for the requesting store', async () => 
   ]);
 });
 
+test('subscription catalogue migration replaces legacy Pro plans', async () => {
+  const verified = await createAccount('+919876543253');
+  const { Subscription, SubscriptionPlan } = require('../src/models');
+  const { syncSubscriptionPlans } = require('../src/services/subscription-plan-catalog.service');
+  await SubscriptionPlan.create({
+    code: 'pro',
+    name: 'Legacy Pro',
+    active: true,
+    trialDays: 14,
+    monthlyPricePaise: 69900,
+    yearlyPricePaise: 699000,
+    limits: { customers: -1, ordersPerMonth: -1, staffSeats: 1 },
+    features: [],
+    storeProducts: [
+      {
+        platform: 'google',
+        productId: 'tailo360_legacy_pro_monthly',
+        period: 'monthly',
+        active: true,
+      },
+    ],
+  });
+  await Subscription.updateOne(
+    { studioId: verified.body.data.studioId },
+    { $set: { plan: 'pro', seatLimit: 1 } },
+  );
+
+  await syncSubscriptionPlans();
+
+  expect(await SubscriptionPlan.findOne({ code: 'pro' })).toBeNull();
+  const starterPlan = await SubscriptionPlan.findOne({ code: 'starter' });
+  expect(starterPlan).toMatchObject({
+    name: '2 Staff',
+    monthlyPricePaise: 4900,
+    yearlyPricePaise: 47040,
+    limits: { customers: -1, ordersPerMonth: -1, staffSeats: 2 },
+    legacyStoreProducts: [
+      expect.objectContaining({
+        platform: 'google',
+        productId: 'tailo360_legacy_pro_monthly',
+        period: 'monthly',
+      }),
+    ],
+  });
+  const { planFor } = require('../src/services/store-verification.service');
+  await expect(
+    planFor('tailo360_legacy_pro_monthly', 'google'),
+  ).resolves.toMatchObject({ code: 'starter' });
+  expect(
+    await Subscription.findOne({ studioId: verified.body.data.studioId }),
+  ).toMatchObject({ plan: 'starter', seatLimit: 2 });
+});
+
 test('platform admin can grant expiring test access without a store product', async () => {
   const verified = await createAccount('+919876543215');
   const { User, Subscription, SubscriptionPlan } = require('../src/models');
