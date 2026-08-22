@@ -1,5 +1,5 @@
 const { z } = require('zod');
-const { Subscription, SubscriptionPlan, SubscriptionEvent, Member } = require('../models');
+const { Subscription, SubscriptionPlan, SubscriptionEvent, SubscriptionOffer, Member } = require('../models');
 const { AppError } = require('../utils/errors');
 const { verifyPurchase, planFor } = require('../services/store-verification.service');
 const { rewardReferralForStudio, expireReferrals } = require('../services/subscription-lifecycle.service');
@@ -41,4 +41,29 @@ const planInput = z.object({ code: z.enum(['starter', 'studio']), name: z.string
 async function adminListPlans(req, res) { res.json({ data: await SubscriptionPlan.find().sort({ monthlyPricePaise: 1 }) }); }
 async function adminCreatePlan(req, res) { const plan = await SubscriptionPlan.create(planInput.parse(req.body)); await auditAdmin(req, 'subscription_plan.created', 'subscription_plan', plan, undefined, plan); res.status(201).json({ data: plan }); }
 async function adminUpdatePlan(req, res) { const before = await SubscriptionPlan.findById(req.params.id); const plan = await SubscriptionPlan.findByIdAndUpdate(req.params.id, planInput.partial().parse(req.body), { new: true, runValidators: true }); if (!plan) throw new AppError(404, 'NOT_FOUND', 'Subscription plan was not found.'); await auditAdmin(req, 'subscription_plan.updated', 'subscription_plan', plan, before, plan); res.json({ data: plan }); }
-module.exports = { get, usage, plans, products, validatePurchase, adminListPlans, adminCreatePlan, adminUpdatePlan };
+const offerInput = z.object({
+  code: z.string().trim().toUpperCase().regex(/^[A-Z0-9_-]{3,40}$/),
+  title: z.string().trim().min(3).max(100),
+  description: z.string().trim().max(300).optional(),
+  active: z.boolean().optional(),
+  priority: z.number().int().min(0).max(1000).optional(),
+  benefit: z.object({
+    type: z.enum(['trial_days', 'plan_access_days']),
+    durationDays: z.number().int().min(1).max(365),
+    plan: z.enum(['starter', 'studio']),
+  }),
+  eligibility: z.object({
+    audience: z.literal('new_studios').default('new_studios'),
+    maxRedemptions: z.number().int().min(0).max(10000000).default(0),
+    startsAt: z.coerce.date().nullable().optional(),
+    endsAt: z.coerce.date().nullable().optional(),
+  }).superRefine((value, context) => {
+    if (value.startsAt && value.endsAt && value.endsAt < value.startsAt) {
+      context.addIssue({ code: 'custom', message: 'End date must be after the start date.' });
+    }
+  }),
+});
+async function adminListOffers(req, res) { res.json({ data: await SubscriptionOffer.find().sort({ createdAt: -1 }) }); }
+async function adminCreateOffer(req, res) { const offer = await SubscriptionOffer.create(offerInput.parse(req.body)); await auditAdmin(req, 'subscription_offer.created', 'subscription_offer', offer, undefined, offer); res.status(201).json({ data: offer }); }
+async function adminUpdateOffer(req, res) { const before = await SubscriptionOffer.findById(req.params.id); const offer = await SubscriptionOffer.findByIdAndUpdate(req.params.id, offerInput.partial().parse(req.body), { new: true, runValidators: true }); if (!offer) throw new AppError(404, 'NOT_FOUND', 'Subscription offer was not found.'); await auditAdmin(req, 'subscription_offer.updated', 'subscription_offer', offer, before, offer); res.json({ data: offer }); }
+module.exports = { get, usage, plans, products, validatePurchase, adminListPlans, adminCreatePlan, adminUpdatePlan, adminListOffers, adminCreateOffer, adminUpdateOffer };

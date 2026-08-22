@@ -386,7 +386,7 @@ const subscriptionSchema = new Schema(
     platform: { type: String, enum: ["google", "apple"] },
     entitlementSource: {
       type: String,
-      enum: ["trial", "store", "admin_test"],
+      enum: ["trial", "store", "admin_test", "promotion"],
     },
     adminGrant: {
       grantedBy: { type: Schema.Types.ObjectId, ref: "User" },
@@ -399,6 +399,12 @@ const subscriptionSchema = new Schema(
     periodEndsAt: Date,
     seatLimit: { type: Number, default: 2 },
     referralCreditPaise: { type: Number, default: 0, min: 0 },
+    promotion: {
+      offerId: { type: Schema.Types.ObjectId, ref: "SubscriptionOffer" },
+      code: String,
+      title: String,
+      redeemedAt: Date,
+    },
     lastVerifiedAt: Date,
   },
   base,
@@ -443,6 +449,47 @@ const subscriptionPlanSchema = new Schema(
   },
   base,
 );
+const subscriptionOfferSchema = new Schema(
+  {
+    code: {
+      type: String,
+      required: true,
+      unique: true,
+      trim: true,
+      uppercase: true,
+      match: /^[A-Z0-9_-]{3,40}$/,
+    },
+    title: { type: String, required: true, trim: true, maxlength: 100 },
+    description: { type: String, trim: true, maxlength: 300 },
+    active: { type: Boolean, default: true },
+    priority: { type: Number, default: 0, min: 0, max: 1000 },
+    // An offer always provides free access for this number of days. It can
+    // start as a trial or as an active entitlement on the selected plan.
+    benefit: {
+      type: {
+        type: String,
+        enum: ["trial_days", "plan_access_days"],
+        default: "trial_days",
+      },
+      durationDays: { type: Number, required: true, min: 1, max: 365 },
+      plan: { type: String, enum: ["starter", "studio"], default: "starter" },
+    },
+    eligibility: {
+      audience: {
+        type: String,
+        enum: ["new_studios"],
+        default: "new_studios",
+      },
+      // 0 means unlimited. A positive number is reserved atomically at signup.
+      maxRedemptions: { type: Number, default: 0, min: 0, max: 10000000 },
+      startsAt: Date,
+      endsAt: Date,
+    },
+    redemptionCount: { type: Number, default: 0, min: 0 },
+  },
+  base,
+);
+subscriptionOfferSchema.index({ active: 1, "eligibility.startsAt": 1, "eligibility.endsAt": 1 });
 const referralSchema = new Schema(
   {
     referrerStudioId: {
@@ -747,6 +794,7 @@ module.exports = {
   Order: model("Order", orderSchema),
   Subscription: model("Subscription", subscriptionSchema),
   SubscriptionPlan: model("SubscriptionPlan", subscriptionPlanSchema),
+  SubscriptionOffer: model("SubscriptionOffer", subscriptionOfferSchema),
   SubscriptionEvent: model("SubscriptionEvent", subscriptionEventSchema),
   Referral: model("Referral", referralSchema),
   ReferralRewardConfig: model(

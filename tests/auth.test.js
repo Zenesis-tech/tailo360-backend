@@ -1421,3 +1421,26 @@ test('paid referral reward is idempotent when triggered concurrently', async () 
   expect(after.trialEndsAt.getTime() - originalTrialEnd).toBe(3 * 86400000);
   expect((await Referral.findOne({ refereeStudioId: referee.body.data.studioId })).status).toBe('rewarded');
 });
+
+test('a capped new-studio subscription offer is claimed only up to its limit', async () => {
+  const { SubscriptionOffer, Subscription } = require('../src/models');
+  const offer = await SubscriptionOffer.create({
+    code: 'LAUNCH_ONE',
+    title: 'Launch offer',
+    active: true,
+    benefit: { type: 'trial_days', durationDays: 90, plan: 'starter' },
+    eligibility: { audience: 'new_studios', maxRedemptions: 1 },
+  });
+
+  const [first, second] = await Promise.all([
+    createAccount('+919876544101'),
+    createAccount('+919876544102'),
+  ]);
+  const subscriptions = await Subscription.find({
+    studioId: { $in: [first.body.data.studioId, second.body.data.studioId] },
+  });
+  const promoted = subscriptions.filter((subscription) => subscription.entitlementSource === 'promotion');
+  expect(promoted).toHaveLength(1);
+  expect(promoted[0].promotion.code).toBe('LAUNCH_ONE');
+  expect((await SubscriptionOffer.findById(offer._id)).redemptionCount).toBe(1);
+});

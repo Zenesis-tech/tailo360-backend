@@ -69,5 +69,11 @@ Referral policy snapshots are stored on each referral at creation, so changing t
 
 For Google, grant the service account in `GOOGLE_SERVICE_ACCOUNT_JSON` access to the Play Console app and set `GOOGLE_PLAY_PACKAGE_NAME`. Google’s subscription API reads a subscription by purchase token and requires the Android Publisher scope. [Google Play subscription lookup](https://developers.google.com/android-publisher/api-ref/rest/v3/purchases.subscriptionsv2/get)
 
+## Introductory subscription offers
+
+Platform admins manage launch campaigns at **Commercial → Subscription offers**. An offer can give every eligible new studio (or the first configured number of new studios) a free trial or active-plan access for 1–365 days. Campaigns can be scheduled, paused, capped, and prioritised when dates overlap.
+
+For example, create `LAUNCH_1000` with **90 days**, **Starter**, and a **maximum of 1,000**. The server reserves each redemption atomically during first-time studio provisioning, so concurrent signups cannot exceed the cap. Offer details are snapshotted onto the resulting subscription and are visible through the existing subscriptions/admin APIs.
+
 For Apple, create an App Store Connect API key and set the Apple issuer/key/private-key/bundle fields. The backend calls App Store Server API using a transaction ID; keep `APPLE_ENVIRONMENT=sandbox` for TestFlight/sandbox and switch it to `production` for release. [Apple App Store Server API](https://developer.apple.com/documentation/appstoreserverapi)
 "# tailo360-backend" 

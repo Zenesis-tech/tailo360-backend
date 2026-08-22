@@ -298,6 +298,9 @@ router.patch(
   requirePlatformAdmin,
   subscriptions.adminUpdatePlan,
 );
+router.get("/admin/subscription-offers", authenticate, requirePlatformAdmin, subscriptions.adminListOffers);
+router.post("/admin/subscription-offers", authenticate, requirePlatformAdmin, subscriptions.adminCreateOffer);
+router.patch("/admin/subscription-offers/:id", authenticate, requirePlatformAdmin, subscriptions.adminUpdateOffer);
 router.get(
   "/admin/referral-reward-configs",
   authenticate,

@@ -5,6 +5,7 @@ const env = require('../config/env');
 const { User, Studio, Member, Subscription, ReferralRewardConfig, Session, Referral, SubscriptionPlan } = require('../models');
 const { provisionStarterGarments } = require('./garment-catalog.service');
 const { rewardReferralForStudio } = require('./subscription-lifecycle.service');
+const { claimNewStudioOffer } = require('./subscription-offer.service');
 const referralId = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ', 7);
 const starterPlanDefaults = {
   code: 'starter',
@@ -33,8 +34,22 @@ async function createStudioFor(user, { studioName, referralCode, garmentAudience
     { $setOnInsert: starterPlanDefaults },
     { upsert: true, new: true, setDefaultsOnInsert: true },
   );
-  const trialDays = starter?.trialDays ?? 14;
-  await Subscription.create({ studioId: studio._id, status: 'trial', plan: 'starter', entitlementSource: 'trial', trialEndsAt: new Date(Date.now() + trialDays * 86400000), seatLimit: starter?.limits.staffSeats ?? 2 });
+  const claimedOffer = await claimNewStudioOffer();
+  const offer = claimedOffer?.offer;
+  const subscriptionPlan = claimedOffer?.plan || starter;
+  const durationDays = offer?.benefit.durationDays ?? subscriptionPlan?.trialDays ?? 14;
+  const accessEndsAt = new Date(Date.now() + durationDays * 86400000);
+  const isActiveOffer = offer?.benefit.type === 'plan_access_days';
+  await Subscription.create({
+    studioId: studio._id,
+    status: isActiveOffer ? 'active' : 'trial',
+    plan: subscriptionPlan?.code || 'starter',
+    entitlementSource: offer ? 'promotion' : 'trial',
+    trialEndsAt: isActiveOffer ? undefined : accessEndsAt,
+    periodEndsAt: isActiveOffer ? accessEndsAt : undefined,
+    seatLimit: subscriptionPlan?.limits.staffSeats ?? 2,
+    promotion: offer ? { offerId: offer._id, code: offer.code, title: offer.title, redeemedAt: new Date() } : undefined,
+  });
   await provisionStarterGarments(studio._id, audiences);
   if (referralCode) {
     const referrer = await Studio.findOne({ referralCode: referralCode.toUpperCase() });
