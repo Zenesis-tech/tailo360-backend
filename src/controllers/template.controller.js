@@ -29,6 +29,9 @@ const input = z.object({
       z.object({
         id: z.string().optional(),
         name: z.string().trim().min(1).max(60),
+        iconKey: z.string().trim().max(60).optional(),
+        iconUrl,
+        iconMediaId: z.string().nullable().optional(),
         unit: z.enum(["in", "cm"]).default("in"),
         required: z.boolean().default(false),
         active: z.boolean().default(true),
@@ -76,12 +79,35 @@ const visibleToStudio = (studioId) => ({
   deletedAt: null,
   $or: [{ scope: "global" }, { studioId, scope: { $ne: "global" } }],
 });
+const fieldMatchKeys = (field) => [field.iconKey, field.name]
+  .map((value) => String(value || "").toLowerCase().normalize("NFKD")
+    .replace(/[^\p{L}\p{N}]+/gu, " ").trim())
+  .filter(Boolean);
+const inheritedFields = (fields, globalFieldIcons) => (fields || []).map((raw) => {
+  const field = raw.toObject ? raw.toObject() : { ...raw };
+  if (field.iconMediaId || field.iconUrl) return field;
+  const inherited = fieldMatchKeys(field)
+    .map((key) => globalFieldIcons.get(key))
+    .find(Boolean);
+  return inherited
+    ? {
+        ...field,
+        iconKey: field.iconKey || inherited.iconKey || "",
+        iconMediaId: inherited.iconMediaId || null,
+        iconUrl: inherited.iconUrl || "",
+      }
+    : field;
+});
 async function withDiagramUrls(rows) {
   const values = rows.map((row) => (row.toObject ? row.toObject() : row));
   const ids = [
     ...new Set(
       values
-        .flatMap((row) => [row.garmentIconMediaId, row.measurementDiagramMediaId])
+        .flatMap((row) => [
+          row.garmentIconMediaId,
+          row.measurementDiagramMediaId,
+          ...(row.fields || []).map((field) => field.iconMediaId),
+        ])
         .map((id) => String(id || ""))
         .filter(Boolean),
     ),
@@ -102,6 +128,11 @@ async function withDiagramUrls(rows) {
       urls.get(String(row.measurementDiagramMediaId)) ||
       row.measurementDiagramUrl ||
       "",
+    fields: (row.fields || []).map((field) => ({
+      ...(field.toObject ? field.toObject() : field),
+      iconUrl:
+        urls.get(String(field.iconMediaId)) || field.iconUrl || "",
+    })),
   }));
 }
 async function list(req, res) {
@@ -130,6 +161,16 @@ async function list(req, res) {
     $and: [visibleToStudio(req.auth.studio._id), audienceFilter],
     ...(req.query.active === "true" ? { active: true } : {}),
   }).sort({ scope: 1, audience: 1, name: 1 });
+  const globalFieldIcons = new Map();
+  for (const row of rows) {
+    if (row.scope !== "global") continue;
+    for (const field of row.fields || []) {
+      if (!field.iconMediaId && !field.iconUrl) continue;
+      for (const key of fieldMatchKeys(field)) {
+        if (!globalFieldIcons.has(key)) globalFieldIcons.set(key, field);
+      }
+    }
+  }
   const byName = new Map();
   const globalByName = new Map();
   for (const row of rows) {
@@ -139,20 +180,16 @@ async function list(req, res) {
     if (!current || row.scope !== "global") {
       // Studio templates override global template details, but retain the
       // platform-managed icon until the studio supplies its own image.
-      if (
-        row.scope !== "global" &&
-        !row.garmentIconMediaId &&
-        !row.garmentIconUrl
-      ) {
+      if (row.scope !== "global") {
         const global = globalByName.get(key);
-        if (global) {
-          byName.set(key, {
-            ...row.toObject(),
-            garmentIconMediaId: global.garmentIconMediaId,
-            garmentIconUrl: global.garmentIconUrl,
-          });
-          continue;
+        const value = row.toObject();
+        value.fields = inheritedFields(value.fields, globalFieldIcons);
+        if (!row.garmentIconMediaId && !row.garmentIconUrl && global) {
+          value.garmentIconMediaId = global.garmentIconMediaId;
+          value.garmentIconUrl = global.garmentIconUrl;
         }
+        byName.set(key, value);
+        continue;
       }
       byName.set(key, row);
     }

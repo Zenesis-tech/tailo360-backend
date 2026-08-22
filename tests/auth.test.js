@@ -834,6 +834,7 @@ test('shop onboarding persists the owner and business profile', async () => {
 });
 
 test('standard garments are global while studio-created garments stay private', async () => {
+  const { GarmentTemplate } = require('../src/models');
   const first = await createAccount('+919876543217', { garmentAudiences: ['men'] });
   const second = await createAccount('+919876543218', { garmentAudiences: ['men'] });
   const firstList = await request(app)
@@ -849,6 +850,15 @@ test('standard garments are global while studio-created garments stay private', 
     secondList.body.data.map((row) => row._id).sort(),
   );
   expect(firstList.body.data.every((row) => row.scope === 'global')).toBe(true);
+
+  const globalWithChest = await GarmentTemplate.findOne({
+    scope: 'global',
+    'fields.name': 'Chest',
+  });
+  const globalChest = globalWithChest.fields.find((field) => field.name === 'Chest');
+  globalChest.iconKey = 'chest';
+  globalChest.iconUrl = 'https://cdn.example.com/measurement-icons/chest.png';
+  await globalWithChest.save();
 
   const custom = await request(app)
     .post('/api/v1/garment-templates')
@@ -886,6 +896,14 @@ test('standard garments are global while studio-created garments stay private', 
   expect(visibleShirts).toHaveLength(1);
   expect(visibleShirts[0]).toMatchObject({ scope: 'studio' });
   expect(visibleShirts[0].fields[0].name).toBe('Studio Shirt Length');
+  const customAfter = firstAfterOverride.body.data.find(
+    (row) => row.name === 'Custom ceremonial coat',
+  );
+  expect(customAfter.fields[0]).toMatchObject({
+    name: 'Chest',
+    iconKey: 'chest',
+    iconUrl: 'https://cdn.example.com/measurement-icons/chest.png',
+  });
 
   const secondAfter = await request(app)
     .get('/api/v1/garment-templates?active=true')
@@ -898,6 +916,7 @@ test('standard garments are global while studio-created garments stay private', 
 test('garment templates persist a backend-managed measurement diagram', async () => {
   const verified = await createAccount('+919876543213');
   const diagram = 'https://cdn.example.com/measurement-guides/shirt.png';
+  const fieldIcon = 'https://cdn.example.com/measurement-icons/chest.png';
   const created = await request(app)
     .post('/api/v1/garment-templates')
     .set('Authorization', `Bearer ${verified.body.data.accessToken}`)
@@ -905,11 +924,16 @@ test('garment templates persist a backend-managed measurement diagram', async ()
       name: 'Diagram Shirt',
       audience: 'men',
       measurementDiagramUrl: diagram,
-      fields: [{ name: 'Chest', unit: 'in', required: true }],
+      fields: [{ name: 'Chest', iconKey: 'chest', iconUrl: fieldIcon, unit: 'in', required: true }],
     })
     .expect(201);
 
   expect(created.body.data.measurementDiagramUrl).toBe(diagram);
+  expect(created.body.data.fields[0]).toMatchObject({
+    name: 'Chest',
+    iconKey: 'chest',
+    iconUrl: fieldIcon,
+  });
   const templates = await request(app)
     .get('/api/v1/garment-templates?active=true')
     .set('Authorization', `Bearer ${verified.body.data.accessToken}`)
@@ -1246,6 +1270,17 @@ test('platform admin can upload, preview, replace, and delete a garment diagram'
     mobileList.body.data.find((row) => row._id === template.id)
       .measurementDiagramUrl,
   ).toContain('https://media.example.test/');
+
+  const fieldId = template.fields[0]._id;
+  const fieldIcon = await request(app)
+    .put(`/api/v1/admin/garment-templates/${template.id}/fields/${fieldId}/icon`)
+    .set('Authorization', `Bearer ${verified.body.data.accessToken}`)
+    .set('Content-Type', 'image/png')
+    .set('X-File-Name', 'length-icon.png')
+    .send(png)
+    .expect(200);
+  expect(fieldIcon.body.data.fields[0].iconMediaId).toBeTruthy();
+  expect(fieldIcon.body.data.fields[0].iconUrl).toContain('https://media.example.test/');
 
   await request(app)
     .delete(`/api/v1/admin/garment-templates/${template.id}/diagram`)

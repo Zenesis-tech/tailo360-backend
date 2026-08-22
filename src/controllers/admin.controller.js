@@ -72,6 +72,9 @@ const templateInput = z.object({
       z.object({
         id: z.string().optional(),
         name: z.string().trim().min(1).max(60),
+        iconKey: z.string().trim().max(60).optional(),
+        iconUrl,
+        iconMediaId: z.string().nullable().optional(),
         unit: z.enum(["in", "cm"]).default("in"),
         required: z.boolean().default(false),
         active: z.boolean().default(true),
@@ -519,7 +522,11 @@ async function withDiagramUrls(rows) {
   const mediaIds = [
     ...new Set(
       values
-        .flatMap((row) => [row.garmentIconMediaId, row.measurementDiagramMediaId])
+        .flatMap((row) => [
+          row.garmentIconMediaId,
+          row.measurementDiagramMediaId,
+          ...(row.fields || []).map((field) => field.iconMediaId),
+        ])
         .map((id) => String(id || ""))
         .filter(Boolean),
     ),
@@ -543,6 +550,11 @@ async function withDiagramUrls(rows) {
       urls.get(String(row.measurementDiagramMediaId)) ||
       row.measurementDiagramUrl ||
       "",
+    fields: (row.fields || []).map((field) => ({
+      ...(field.toObject ? field.toObject() : field),
+      iconUrl:
+        urls.get(String(field.iconMediaId)) || field.iconUrl || "",
+    })),
   }));
 }
 async function templates(req, res) {
@@ -634,9 +646,11 @@ async function deleteTemplate(req, res) {
   }
 
   const before = row.toObject();
-  const mediaIds = [row.garmentIconMediaId, row.measurementDiagramMediaId].filter(
-    Boolean,
-  );
+  const mediaIds = [
+    row.garmentIconMediaId,
+    row.measurementDiagramMediaId,
+    ...(row.fields || []).map((field) => field.iconMediaId),
+  ].filter(Boolean);
   const mediaRows = mediaIds.length
     ? await Media.find({ _id: { $in: mediaIds } })
     : [];
@@ -893,6 +907,52 @@ async function deleteTemplateIcon(req, res) {
   await publishTemplateChange(template);
   res.json({ data: (await withDiagramUrls([template]))[0] });
 }
+async function uploadMeasurementFieldIcon(req, res) {
+  const contentType = z.enum(["image/jpeg", "image/png", "image/webp"]).parse(req.get("content-type"));
+  let decodedName = req.get("x-file-name") || "measurement-field-icon";
+  try { decodedName = decodeURIComponent(decodedName); } catch (_) { /* use encoded value */ }
+  const fileName = z.string().trim().min(1).max(180).parse(decodedName);
+  if (!Buffer.isBuffer(req.body) || !req.body.length)
+    throw new AppError(422, "IMAGE_EMPTY", "Choose an image to upload.");
+  if (!imageMatchesContentType(req.body, contentType))
+    throw new AppError(422, "MEDIA_TYPE_MISMATCH", "The selected file is not a valid JPG, PNG, or WebP image.");
+
+  const template = await GarmentTemplate.findById(req.params.id);
+  if (!template) throw notFound("Garment template");
+  const field = template.fields.id(req.params.fieldId);
+  if (!field) throw notFound("Measurement field");
+  const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const ownerKey = template.scope === "global" ? "global" : String(template.studioId);
+  const key = `${ownerKey}/measurement_field_icon/${field.id}/${Date.now()}-${nanoid(12)}-${safeName}`;
+  const media = await Media.create({
+    studioId: template.studioId,
+    ownerUserId: req.auth.user._id,
+    objectKey: key,
+    originalName: fileName,
+    contentType,
+    sizeBytes: req.body.length,
+    purpose: "reference_image",
+    status: "pending",
+  });
+  await r2.putObject({ key, body: req.body, contentType });
+  media.status = "ready";
+  await media.save();
+  const oldMediaId = field.iconMediaId;
+  field.iconMediaId = media._id;
+  field.iconUrl = "";
+  await template.save();
+  if (oldMediaId && String(oldMediaId) !== media.id) {
+    const oldMedia = await Media.findById(oldMediaId);
+    if (oldMedia) {
+      try { await r2.deleteObject(oldMedia.objectKey); } catch (_) { /* retry later */ }
+      oldMedia.status = "deleted";
+      await oldMedia.save();
+    }
+  }
+  await auditAdmin(req, "measurement_field.icon_updated", "garment_template", template, { fieldId: field.id, iconMediaId: oldMediaId }, { fieldId: field.id, iconMediaId: media._id });
+  await publishTemplateChange(template);
+  res.json({ data: (await withDiagramUrls([template]))[0] });
+}
 async function prices(req, res) {
   const result = await list(Price, {}, { effectiveFrom: -1 }, req, {
     path: "templateId",
@@ -1066,6 +1126,7 @@ module.exports = {
   deleteTemplate,
   uploadTemplateDiagram,
   uploadTemplateIcon,
+  uploadMeasurementFieldIcon,
   createTemplateDiagramUpload,
   completeTemplateDiagramUpload,
   deleteTemplateDiagram,

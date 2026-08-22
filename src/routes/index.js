@@ -350,6 +350,16 @@ router.put(
   admin.uploadTemplateIcon,
 );
 router.delete("/admin/garment-templates/:id/icon", authenticate, requirePlatformAdmin, admin.deleteTemplateIcon);
+router.put(
+  "/admin/garment-templates/:id/fields/:fieldId/icon",
+  authenticate,
+  requirePlatformAdmin,
+  express.raw({
+    type: ["image/jpeg", "image/png", "image/webp"],
+    limit: `${env.MAX_FILE_SIZE_MB}mb`,
+  }),
+  admin.uploadMeasurementFieldIcon,
+);
 router.get("/admin/prices", authenticate, requirePlatformAdmin, admin.prices);
 router.get("/admin/measurements", authenticate, requirePlatformAdmin, admin.measurements);
 router.get("/admin/members", authenticate, requirePlatformAdmin, admin.members);

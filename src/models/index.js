@@ -227,6 +227,13 @@ const templateSchema = new Schema(
       {
         id: String,
         name: String,
+        iconKey: { type: String, trim: true, maxlength: 60, default: "" },
+        iconUrl: { type: String, trim: true, maxlength: 2048, default: "" },
+        iconMediaId: {
+          type: Schema.Types.ObjectId,
+          ref: "Media",
+          default: null,
+        },
         unit: { type: String, enum: ["in", "cm"] },
         required: { type: Boolean, default: false },
         active: { type: Boolean, default: true },
