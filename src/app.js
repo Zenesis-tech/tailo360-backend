@@ -11,12 +11,18 @@ const { AppError } = require('./utils/errors');
 const { safeError } = require('./utils/logging');
 const { connectDatabase, databaseStatus } = require('./config/db');
 const { requestLocale } = require('./middleware/locale');
+const { startJobs } = require('./jobs');
 const app = express();
 // Some managed hosts import the Express app instead of executing server.js.
-// Start the shared connection in both modes; connectDatabase is idempotent.
-connectDatabase().catch((error) => {
-  console.error("Initial MongoDB connection failed", safeError(error));
-});
+// Start the shared connection and recurring jobs in both modes. Both startup
+// functions are idempotent, so server.js can safely use them as well.
+connectDatabase()
+  .then(() => {
+    if (env.NODE_ENV !== 'test') startJobs();
+  })
+  .catch((error) => {
+    console.error("Initial MongoDB connection failed", safeError(error));
+  });
 // Hostinger terminates HTTPS in front of Node and forwards the client address.
 // Trust the nearest proxy so rate limiting keys requests by the real client IP.
 app.set("trust proxy", 1);

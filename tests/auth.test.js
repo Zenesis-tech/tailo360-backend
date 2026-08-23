@@ -5,6 +5,7 @@ process.env.JWT_REFRESH_SECRET = 'a-very-long-test-refresh-secret-that-is-at-lea
 process.env.EXPOSE_DEV_OTP = 'true';
 process.env.OTP_DELIVERY_MODE = 'development';
 process.env.PHONE_AUTH_MODE = 'server';
+process.env.DEMO_ACCOUNT_ENABLED = 'false';
 process.env.BACKUP_ENCRYPTION_KEY = Buffer.alloc(32, 9).toString('base64');
 process.env.BACKUP_R2_BUCKET = 'backup-test';
 
@@ -15,6 +16,7 @@ let mongo;
 let app;
 let mongoose;
 let mockVerifyFirebaseIdToken;
+let mockDeleteFirebaseUser;
 
 beforeAll(async () => {
   mongo = await MongoMemoryServer.create();
@@ -40,10 +42,12 @@ beforeAll(async () => {
       firebase: { sign_in_provider: 'phone' },
     };
   });
+  mockDeleteFirebaseUser = jest.fn(async () => ({}));
   jest.doMock('../src/services/firebase-admin.service', () => ({
     firebaseAdmin: jest.fn(() => ({
       auth: () => ({
         verifyIdToken: mockVerifyFirebaseIdToken,
+        deleteUser: mockDeleteFirebaseUser,
       }),
       messaging: () => ({ sendEachForMulticast: jest.fn() }),
     })),
@@ -264,6 +268,149 @@ test('account deletion signs the user out and login within 30 days restores it',
   const user = await User.findOne({ phone });
   expect(user.deletionScheduledFor).toBeNull();
   expect(user.deletionRequestedAt).toBeNull();
+});
+
+test('expired owner deletion permanently purges the studio, CRM data and media', async () => {
+  const phone = '+918800000281';
+  const verified = await createAccount(phone);
+  const studioId = verified.body.data.studioId;
+  const {
+    User,
+    Studio,
+    Member,
+    Customer,
+    Measurement,
+    GarmentTemplate,
+    Order,
+    Subscription,
+    Media,
+    Device,
+    Notification,
+    SupportTicket,
+  } = require('../src/models');
+  const r2 = require('../src/services/r2.service');
+  const user = await User.findOne({ phone });
+  const template = await GarmentTemplate.create({
+    studioId,
+    scope: 'studio',
+    name: 'Purge Test Garment',
+    audience: 'unisex',
+    fields: [{ id: 'chest', name: 'Chest', unit: 'in', required: true, position: 1 }],
+  });
+  const customer = await Customer.create({
+    studioId,
+    name: 'Deletion Test Customer',
+    phone: '+918800001281',
+  });
+  await Measurement.create({
+    studioId,
+    customerId: customer._id,
+    templateId: template._id,
+    version: 1,
+    values: { chest: '38' },
+    unit: 'in',
+    createdBy: user._id,
+  });
+  await Order.create({
+    studioId,
+    customerId: customer._id,
+    code: 'PURGE-213',
+    deliveryDate: new Date(Date.now() + 86400000),
+    totalPaise: 10000,
+  });
+  await Media.create({
+    studioId,
+    ownerUserId: user._id,
+    objectKey: `${studioId}/voice/purge-213.m4a`,
+    originalName: 'purge-213.m4a',
+    contentType: 'audio/mp4',
+    purpose: 'voice_note',
+    status: 'ready',
+  });
+  await Device.create({
+    studioId,
+    userId: user._id,
+    token: 'purge-device-213',
+    platform: 'android',
+  });
+  await Notification.create({
+    studioId,
+    userId: user._id,
+    type: 'purge_test',
+    title: 'Purge test',
+    body: 'Delete me',
+  });
+  await SupportTicket.create({
+    studioId,
+    subject: 'Purge test',
+    category: 'account',
+    messages: [{ body: 'Delete me', authorId: user._id }],
+  });
+  user.deletionScheduledFor = new Date(Date.now() - 1000);
+  user.firebaseUid = 'firebase-purge-owner-281';
+  await user.save();
+
+  const { purgeExpiredAccounts } = require('../src/services/account-purge.service');
+  const result = await purgeExpiredAccounts();
+  expect(result).toMatchObject({ purged: 1, failures: [] });
+  expect(mockDeleteFirebaseUser).toHaveBeenCalledWith('firebase-purge-owner-281');
+  expect(r2.deleteObject).toHaveBeenCalledWith(`${studioId}/voice/purge-213.m4a`);
+  expect(await User.countDocuments({ _id: user._id })).toBe(0);
+  expect(await Studio.countDocuments({ _id: studioId })).toBe(0);
+  expect(await Member.countDocuments({ studioId })).toBe(0);
+  expect(await Customer.countDocuments({ studioId })).toBe(0);
+  expect(await Measurement.countDocuments({ studioId })).toBe(0);
+  expect(await Order.countDocuments({ studioId })).toBe(0);
+  expect(await Subscription.countDocuments({ studioId })).toBe(0);
+  expect(await Media.countDocuments({ studioId })).toBe(0);
+  expect(await Device.countDocuments({ studioId })).toBe(0);
+  expect(await Notification.countDocuments({ studioId })).toBe(0);
+  expect(await SupportTicket.countDocuments({ studioId })).toBe(0);
+});
+
+test('expired staff deletion removes identity without deleting the shared studio', async () => {
+  const ownerPhone = '+918800000282';
+  const owner = await createAccount(ownerPhone);
+  const studioId = owner.body.data.studioId;
+  const staffPhone = '+918800000283';
+  await request(app)
+    .post('/api/v1/studio/members')
+    .set('Authorization', `Bearer ${owner.body.data.accessToken}`)
+    .send({ name: 'Deletion Test Staff', phone: staffPhone, role: 'front_desk' })
+    .expect(201);
+  await createAccount(staffPhone);
+
+  const { User, Studio, Member, Customer, Media } = require('../src/models');
+  const r2 = require('../src/services/r2.service');
+  const staffUser = await User.findOne({ phone: staffPhone });
+  const customer = await Customer.create({
+    studioId,
+    name: 'Shared Studio Customer',
+    phone: '+918800001282',
+  });
+  const media = await Media.create({
+    studioId,
+    ownerUserId: staffUser._id,
+    objectKey: `${studioId}/fabric/shared-214.jpg`,
+    originalName: 'shared-214.jpg',
+    contentType: 'image/jpeg',
+    purpose: 'fabric_photo',
+    status: 'ready',
+  });
+  staffUser.deletionScheduledFor = new Date(Date.now() - 1000);
+  await staffUser.save();
+
+  const { purgeAccount } = require('../src/services/account-purge.service');
+  expect(await purgeAccount(staffUser._id)).toBe(true);
+  expect(await User.countDocuments({ _id: staffUser._id })).toBe(0);
+  expect(await Member.countDocuments({ userId: staffUser._id })).toBe(0);
+  expect(await Studio.countDocuments({ _id: studioId })).toBe(1);
+  expect(await Customer.countDocuments({ _id: customer._id })).toBe(1);
+  const retainedMedia = await Media.findById(media._id).lean();
+  expect(retainedMedia).not.toBeNull();
+  const ownerUser = await User.findOne({ phone: ownerPhone });
+  expect(String(retainedMedia.ownerUserId)).toBe(String(ownerUser._id));
+  expect(r2.deleteObject).not.toHaveBeenCalledWith(`${studioId}/fabric/shared-214.jpg`);
 });
 
 test('the enabled demo account uses an isolated, reusable seeded studio', async () => {
@@ -828,7 +975,7 @@ test('refresh tokens rotate and cannot be replayed', async () => {
 });
 
 test('onboarding provisions only the selected garment audiences', async () => {
-  const verified = await createAccount('+919876543212', { garmentAudiences: ['women'] });
+  const verified = await createAccount('+918800000284', { garmentAudiences: ['women'] });
   const profile = await request(app)
     .get('/api/v1/auth/me')
     .set('Authorization', `Bearer ${verified.body.data.accessToken}`)

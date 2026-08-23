@@ -28,6 +28,8 @@ async function restoreAccountIfEligible(user) {
   }
   user.deletionRequestedAt = null;
   user.deletionScheduledFor = null;
+  user.purgeStartedAt = null;
+  user.purgeLastError = null;
   await user.save();
   return true;
 }
@@ -39,7 +41,7 @@ async function verifyOtp(req, res) {
   if (isDemoLogin(body.phone)) { if (body.code !== '111111') throw new AppError(401, 'OTP_INVALID', 'The code is invalid or expired.'); } else if (useOtpProvider()) { if (!await otpProvider.verifyOtp(body.phone, body.code)) throw new AppError(401, 'OTP_INVALID', 'The code is invalid or expired.'); } else { const otp = await Otp.findOne({ phone: body.phone }).sort({ createdAt: -1 }); if (!otp || otp.expiresAt < new Date() || otp.codeHash !== hash(body.code)) throw new AppError(401, 'OTP_INVALID', 'The code is invalid or expired.'); await Otp.deleteMany({ phone: body.phone }); }
   return finishPhoneAuthentication(body.phone, body, res);
 }
-async function finishPhoneAuthentication(phone, input, res) {
+async function finishPhoneAuthentication(phone, input, res, identity = {}) {
   let user = await User.findOne({ phone }); let isNew = false; let member; let studio;
   let accountRestored = false;
   if (user) {
@@ -80,6 +82,10 @@ async function finishPhoneAuthentication(phone, input, res) {
     await seedDemoStudio({ user, studio });
     isNew = false;
   }
+  if (identity.firebaseUid && user.firebaseUid !== identity.firebaseUid) {
+    user.firebaseUid = identity.firebaseUid;
+    await user.save();
+  }
   const needsOnboarding = !isDemoLogin(phone) && member.role === 'owner'
     && (isNew || (!studio.onboardingCompletedAt && studio.name === 'My Studio'));
   const tokens = await issueSession(user, member); res.json({ data: { ...tokens, isNew, accountRestored, needsOnboarding, user: { id: user.id, phone: user.phone, name: user.name, language: user.language }, studioId: member.studioId, role: member.role } });
@@ -102,7 +108,7 @@ async function firebasePhone(req, res) {
     throw new AppError(401, 'FIREBASE_PHONE_REQUIRED', 'A verified Firebase phone number is required.');
   }
   const phone = phoneSchema.parse(decoded.phone_number);
-  return finishPhoneAuthentication(phone, {}, res);
+  return finishPhoneAuthentication(phone, {}, res, { firebaseUid: decoded.uid });
 }
 async function google(req, res) {
   if (!env.GOOGLE_CLIENT_IDS.length) throw new AppError(503, 'GOOGLE_AUTH_NOT_CONFIGURED', 'Google sign-in is not configured.');
@@ -156,6 +162,8 @@ async function scheduleAccountDeletion(req, res) {
   const recoverUntil = new Date(now.getTime() + accountRecoveryWindowMs);
   req.auth.user.deletionRequestedAt = now;
   req.auth.user.deletionScheduledFor = recoverUntil;
+  req.auth.user.purgeStartedAt = null;
+  req.auth.user.purgeLastError = null;
   await Promise.all([
     req.auth.user.save(),
     Session.updateMany({ userId: req.auth.user._id, revokedAt: null }, { revokedAt: now }),

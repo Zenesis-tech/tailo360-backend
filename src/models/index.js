@@ -9,6 +9,7 @@ const base = {
 const userSchema = new Schema(
   {
     phone: { type: String, sparse: true, unique: true, index: true },
+    firebaseUid: { type: String, sparse: true, unique: true, index: true },
     name: String,
     email: { type: String, sparse: true, unique: true },
     googleSubject: { type: String, sparse: true, unique: true },
@@ -22,9 +23,13 @@ const userSchema = new Schema(
     deletionRequestedAt: { type: Date, default: null },
     deletionScheduledFor: { type: Date, default: null },
     deletedAt: Date,
+    purgeStartedAt: { type: Date, default: null },
+    purgeAttempts: { type: Number, default: 0 },
+    purgeLastError: { type: String, default: null },
   },
   base,
 );
+userSchema.index({ deletionScheduledFor: 1, purgeStartedAt: 1 });
 const studioSchema = new Schema(
   {
     name: { type: String, required: true },
