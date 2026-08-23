@@ -43,6 +43,7 @@ router.post("/auth/firebase/phone", auth.firebasePhone);
 router.post("/auth/google", auth.google);
 router.post("/auth/admin/login", auth.adminLogin);
 router.patch("/users/me/preferences", authenticate, auth.updatePreferences);
+router.delete("/users/me", authenticate, auth.scheduleAccountDeletion);
 router.post("/auth/refresh", auth.refresh);
 router.post("/auth/logout", auth.logout);
 router.get("/auth/me", authenticate, auth.me);

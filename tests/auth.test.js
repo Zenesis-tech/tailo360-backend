@@ -241,6 +241,31 @@ test('language preference persists and is returned by the authenticated profile'
   expect(invalid.body.error.code).toBe('VALIDATION_ERROR');
 });
 
+test('account deletion signs the user out and login within 30 days restores it', async () => {
+  const phone = '+919876543212';
+  const verified = await createAccount(phone);
+  const authorization = `Bearer ${verified.body.data.accessToken}`;
+
+  const scheduled = await request(app)
+    .delete('/api/v1/users/me')
+    .set('Authorization', authorization)
+    .expect(200);
+  expect(new Date(scheduled.body.data.recoveryUntil).getTime()).toBeGreaterThan(
+    Date.now() + 29 * 24 * 60 * 60 * 1000,
+  );
+  await request(app)
+    .get('/api/v1/auth/me')
+    .set('Authorization', authorization)
+    .expect(401);
+
+  const restored = await createAccount(phone);
+  expect(restored.body.data.accountRestored).toBe(true);
+  const { User } = require('../src/models');
+  const user = await User.findOne({ phone });
+  expect(user.deletionScheduledFor).toBeNull();
+  expect(user.deletionRequestedAt).toBeNull();
+});
+
 test('Firebase phone ID token provisions a normal Tailo360 session', async () => {
   const env = require('../src/config/env');
   const previousMode = env.PHONE_AUTH_MODE;

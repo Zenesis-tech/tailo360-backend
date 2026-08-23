@@ -19,6 +19,8 @@ const userSchema = new Schema(
       default: "user",
     },
     language: { type: String, enum: ["en", "hi", "gu", "mr"], default: "en" },
+    deletionRequestedAt: { type: Date, default: null },
+    deletionScheduledFor: { type: Date, default: null },
     deletedAt: Date,
   },
   base,
@@ -227,6 +229,13 @@ const templateSchema = new Schema(
       {
         id: String,
         name: String,
+        // The English name is the stable key saved with measurements. These
+        // optional labels are purely for display in the selected app locale.
+        localizedNames: {
+          hi: { type: String, trim: true, maxlength: 60, default: "" },
+          gu: { type: String, trim: true, maxlength: 60, default: "" },
+          mr: { type: String, trim: true, maxlength: 60, default: "" },
+        },
         iconKey: { type: String, trim: true, maxlength: 60, default: "" },
         iconUrl: { type: String, trim: true, maxlength: 2048, default: "" },
         iconMediaId: {

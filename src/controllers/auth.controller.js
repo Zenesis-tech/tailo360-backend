@@ -11,6 +11,23 @@ const { verifyPassword } = require('../services/password.service');
 const { firebaseAdmin } = require('../services/firebase-admin.service');
 const useOtpProvider = () => env.NODE_ENV === 'production' || env.OTP_DELIVERY_MODE === 'provider';
 const phoneSchema = z.string().trim().transform((value) => value.replace(/\s|-/g, '')).refine((value) => /^\+?[1-9]\d{9,14}$/.test(value), 'Use a valid mobile number.').transform((value) => value.startsWith('+') ? value : `+91${value}`);
+const accountRecoveryWindowMs = 30 * 24 * 60 * 60 * 1000;
+
+async function restoreAccountIfEligible(user) {
+  if (user.deletedAt) {
+    throw new AppError(403, 'ACCOUNT_DELETED', 'This account has been permanently deleted.');
+  }
+  if (!user.deletionScheduledFor) return false;
+  if (user.deletionScheduledFor <= new Date()) {
+    user.deletedAt = new Date();
+    await user.save();
+    throw new AppError(403, 'ACCOUNT_DELETED', 'This account has been permanently deleted.');
+  }
+  user.deletionRequestedAt = null;
+  user.deletionScheduledFor = null;
+  await user.save();
+  return true;
+}
 function authConfig(req, res) { res.json({ data: { phoneAuthMode: env.PHONE_AUTH_MODE } }); }
 async function requestOtp(req, res) { if (env.PHONE_AUTH_MODE !== 'server') throw new AppError(409, 'PHONE_AUTH_PROVIDER_DISABLED', 'Server SMS verification is currently disabled.'); const phone = phoneSchema.parse(req.body.phone); if (useOtpProvider()) { await otpProvider.sendOtp(phone); return res.status(202).json({ data: { phone, expiresInSeconds: env.OTP_TTL_MINUTES * 60 } }); } const code = '123456'; await Otp.deleteMany({ phone }); await Otp.create({ phone, codeHash: hash(code), expiresAt: new Date(Date.now() + env.OTP_TTL_MINUTES * 60000) }); res.status(202).json({ data: { phone, expiresInSeconds: env.OTP_TTL_MINUTES * 60, ...(env.EXPOSE_DEV_OTP ? { developmentCode: code } : {}) } }); }
 async function verifyOtp(req, res) {
@@ -21,7 +38,9 @@ async function verifyOtp(req, res) {
 }
 async function finishPhoneAuthentication(phone, input, res) {
   let user = await User.findOne({ phone }); let isNew = false; let member; let studio;
+  let accountRestored = false;
   if (user) {
+    accountRestored = await restoreAccountIfEligible(user);
     member = await Member.findOne({ userId: user._id, status: { $in: ['active', 'limited'] } });
     if (!member) {
       member = await Member.findOne({ phone, userId: null, status: { $in: ['active', 'limited'] } });
@@ -55,7 +74,7 @@ async function finishPhoneAuthentication(phone, input, res) {
   }
   const needsOnboarding = member.role === 'owner'
     && (isNew || (!studio.onboardingCompletedAt && studio.name === 'My Studio'));
-  const tokens = await issueSession(user, member); res.json({ data: { ...tokens, isNew, needsOnboarding, user: { id: user.id, phone: user.phone, name: user.name, language: user.language }, studioId: member.studioId, role: member.role } });
+  const tokens = await issueSession(user, member); res.json({ data: { ...tokens, isNew, accountRestored, needsOnboarding, user: { id: user.id, phone: user.phone, name: user.name, language: user.language }, studioId: member.studioId, role: member.role } });
 }
 async function firebasePhone(req, res) {
   if (env.PHONE_AUTH_MODE !== 'firebase') throw new AppError(409, 'PHONE_AUTH_PROVIDER_DISABLED', 'Firebase phone verification is currently disabled.');
@@ -89,9 +108,10 @@ async function google(req, res) {
   const profile = ticket.getPayload();
   if (!profile?.sub || !profile.email_verified || !profile.email) throw new AppError(401, 'GOOGLE_TOKEN_INVALID', 'Google did not provide a verified identity.');
   let user = await User.findOne({ googleSubject: profile.sub }); let isNew = false; let member; let studio;
-  if (!user) { user = await User.create({ googleSubject: profile.sub, email: profile.email.toLowerCase(), name: profile.name || profile.email }); ({ studio, owner: member } = await createStudioFor(user, { studioName: idToken.studioName })); isNew = true; } else { member = await Member.findOne({ userId: user._id, status: { $in: ['active', 'limited'] } }); if (!member) throw new AppError(403, 'NO_ACTIVE_STUDIO', 'This account has no active studio membership.'); studio = await Studio.findById(member.studioId); }
+  let accountRestored = false;
+  if (!user) { user = await User.create({ googleSubject: profile.sub, email: profile.email.toLowerCase(), name: profile.name || profile.email }); ({ studio, owner: member } = await createStudioFor(user, { studioName: idToken.studioName })); isNew = true; } else { accountRestored = await restoreAccountIfEligible(user); member = await Member.findOne({ userId: user._id, status: { $in: ['active', 'limited'] } }); if (!member) throw new AppError(403, 'NO_ACTIVE_STUDIO', 'This account has no active studio membership.'); studio = await Studio.findById(member.studioId); }
   const needsOnboarding = isNew || (!studio.onboardingCompletedAt && studio.name === 'My Studio');
-  const tokens = await issueSession(user, member); res.json({ data: { ...tokens, isNew, needsOnboarding, user: { id: user.id, email: user.email, name: user.name, language: user.language }, studioId: member.studioId, role: member.role } });
+  const tokens = await issueSession(user, member); res.json({ data: { ...tokens, isNew, accountRestored, needsOnboarding, user: { id: user.id, email: user.email, name: user.name, language: user.language }, studioId: member.studioId, role: member.role } });
 }
 async function adminLogin(req, res) { const input = z.object({ email: z.string().trim().email().max(254), password: z.string().min(10).max(200) }).parse(req.body); const user = await User.findOne({ email: input.email.toLowerCase(), deletedAt: null }).select('+passwordHash'); if (!user || user.platformRole !== 'admin' || !verifyPassword(input.password, user.passwordHash)) throw new AppError(401, 'INVALID_ADMIN_CREDENTIALS', 'Email or password is incorrect.'); const member = await Member.findOne({ userId: user._id, status: { $in: ['active', 'limited'] } }); if (!member) throw new AppError(403, 'NO_ACTIVE_STUDIO', 'This account has no active studio membership.'); const tokens = await issueSession(user, member); res.json({ data: { ...tokens, user: { id: user.id, email: user.email, name: user.name, platformRole: user.platformRole } } }); }
 async function refresh(req, res) {
@@ -123,4 +143,15 @@ async function updatePreferences(req, res) {
   await req.auth.user.save();
   res.json({ data: { language: req.auth.user.language } });
 }
-module.exports = { authConfig, requestOtp, verifyOtp, firebasePhone, google, adminLogin, refresh, logout, me, updatePreferences };
+async function scheduleAccountDeletion(req, res) {
+  const now = new Date();
+  const recoverUntil = new Date(now.getTime() + accountRecoveryWindowMs);
+  req.auth.user.deletionRequestedAt = now;
+  req.auth.user.deletionScheduledFor = recoverUntil;
+  await Promise.all([
+    req.auth.user.save(),
+    Session.updateMany({ userId: req.auth.user._id, revokedAt: null }, { revokedAt: now }),
+  ]);
+  res.json({ data: { recoveryUntil: recoverUntil.toISOString() } });
+}
+module.exports = { authConfig, requestOtp, verifyOtp, firebasePhone, google, adminLogin, refresh, logout, me, updatePreferences, scheduleAccountDeletion };

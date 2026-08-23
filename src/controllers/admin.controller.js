@@ -61,6 +61,13 @@ const iconUrl = z
   .max(2048)
   .refine((value) => !value || /^https?:\/\//i.test(value), "Garment icon must be an http(s) URL.")
   .optional();
+const localizedNames = z
+  .object({
+    hi: z.string().trim().max(60).optional(),
+    gu: z.string().trim().max(60).optional(),
+    mr: z.string().trim().max(60).optional(),
+  })
+  .default({});
 const templateInput = z.object({
   name: z.string().trim().min(2).max(80),
   audience: z.enum(["men", "women", "kids", "unisex"]).default("unisex"),
@@ -72,6 +79,7 @@ const templateInput = z.object({
       z.object({
         id: z.string().optional(),
         name: z.string().trim().min(1).max(60),
+        localizedNames,
         iconKey: z.string().trim().max(60).optional(),
         iconUrl,
         iconMediaId: z.string().nullable().optional(),

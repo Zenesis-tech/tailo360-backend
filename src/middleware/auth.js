@@ -33,7 +33,11 @@ async function authenticateToken(token) {
   if (!token) throw new AppError(401, 'AUTH_REQUIRED', 'Authentication is required.');
   const payload = jwt.verify(token, env.JWT_ACCESS_SECRET);
     const [user, member, studio, subscription] = await Promise.all([
-      User.findOne({ _id: payload.sub, deletedAt: null }),
+      User.findOne({
+        _id: payload.sub,
+        deletedAt: null,
+        deletionScheduledFor: null,
+      }),
       Member.findOne({
         _id: payload.memberId,
         userId: payload.sub,
