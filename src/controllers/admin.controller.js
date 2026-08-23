@@ -334,7 +334,7 @@ async function subscriptions(req, res) {
   if (req.query.plan) filter.plan = req.query.plan;
   const result = await list(Subscription, filter, { updatedAt: -1 }, req, {
     path: "studioId",
-    select: "name referralCode ownerUserId",
+    select: "name address businessType services referralCode ownerUserId onboardingCompletedAt createdAt",
     populate: { path: "ownerUserId", select: "name phone email" },
   });
   res.json(result);
