@@ -266,6 +266,37 @@ test('account deletion signs the user out and login within 30 days restores it',
   expect(user.deletionRequestedAt).toBeNull();
 });
 
+test('the enabled development demo account seeds a reusable studio', async () => {
+  const env = require('../src/config/env');
+  const previous = env.DEMO_ACCOUNT_ENABLED;
+  env.DEMO_ACCOUNT_ENABLED = true;
+  try {
+    await request(app)
+      .post('/api/v1/auth/otp/request')
+      .send({ phone: '9876543210' })
+      .expect(202);
+    const verified = await request(app)
+      .post('/api/v1/auth/otp/verify')
+      .send({ phone: '9876543210', code: '111111' })
+      .expect(200);
+    expect(verified.body.data.isNew).toBe(false);
+    expect(verified.body.data.needsOnboarding).toBe(false);
+    const token = verified.body.data.accessToken;
+    const customers = await request(app)
+      .get('/api/v1/customers')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+    const orders = await request(app)
+      .get('/api/v1/orders')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+    expect(customers.body.data.length).toBeGreaterThanOrEqual(5);
+    expect(orders.body.data.length).toBeGreaterThanOrEqual(5);
+  } finally {
+    env.DEMO_ACCOUNT_ENABLED = previous;
+  }
+});
+
 test('Firebase phone ID token provisions a normal Tailo360 session', async () => {
   const env = require('../src/config/env');
   const previousMode = env.PHONE_AUTH_MODE;

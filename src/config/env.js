@@ -20,6 +20,7 @@ const schema = z.object({
   TWILIO_AUTH_TOKEN: z.string().default(''),
   TWILIO_VERIFY_SERVICE_SID: z.string().default(''),
   EXPOSE_DEV_OTP: z.string().default('false').transform((value) => value === 'true'),
+  DEMO_ACCOUNT_ENABLED: z.string().default('false').transform((value) => value === 'true'),
   ALLOWED_ORIGINS: z.string().default(''),
   UPLOAD_DIR: z.string().default('uploads'),
   MAX_FILE_SIZE_MB: z.coerce.number().positive().default(15),

@@ -9,7 +9,10 @@ const { hash, createStudioFor, issueSession } = require('../services/auth.servic
 const otpProvider = require('../services/otp-provider.service');
 const { verifyPassword } = require('../services/password.service');
 const { firebaseAdmin } = require('../services/firebase-admin.service');
+const { isDemoPhone, seedDemoStudio } = require('../services/demo-account.service');
 const useOtpProvider = () => env.NODE_ENV === 'production' || env.OTP_DELIVERY_MODE === 'provider';
+const isDemoLogin = (phone) =>
+  env.NODE_ENV !== 'production' && env.DEMO_ACCOUNT_ENABLED && isDemoPhone(phone);
 const phoneSchema = z.string().trim().transform((value) => value.replace(/\s|-/g, '')).refine((value) => /^\+?[1-9]\d{9,14}$/.test(value), 'Use a valid mobile number.').transform((value) => value.startsWith('+') ? value : `+91${value}`);
 const accountRecoveryWindowMs = 30 * 24 * 60 * 60 * 1000;
 
@@ -29,11 +32,11 @@ async function restoreAccountIfEligible(user) {
   return true;
 }
 function authConfig(req, res) { res.json({ data: { phoneAuthMode: env.PHONE_AUTH_MODE } }); }
-async function requestOtp(req, res) { if (env.PHONE_AUTH_MODE !== 'server') throw new AppError(409, 'PHONE_AUTH_PROVIDER_DISABLED', 'Server SMS verification is currently disabled.'); const phone = phoneSchema.parse(req.body.phone); if (useOtpProvider()) { await otpProvider.sendOtp(phone); return res.status(202).json({ data: { phone, expiresInSeconds: env.OTP_TTL_MINUTES * 60 } }); } const code = '123456'; await Otp.deleteMany({ phone }); await Otp.create({ phone, codeHash: hash(code), expiresAt: new Date(Date.now() + env.OTP_TTL_MINUTES * 60000) }); res.status(202).json({ data: { phone, expiresInSeconds: env.OTP_TTL_MINUTES * 60, ...(env.EXPOSE_DEV_OTP ? { developmentCode: code } : {}) } }); }
+async function requestOtp(req, res) { if (env.PHONE_AUTH_MODE !== 'server') throw new AppError(409, 'PHONE_AUTH_PROVIDER_DISABLED', 'Server SMS verification is currently disabled.'); const phone = phoneSchema.parse(req.body.phone); if (isDemoLogin(phone)) return res.status(202).json({ data: { phone, expiresInSeconds: env.OTP_TTL_MINUTES * 60, demo: true } }); if (useOtpProvider()) { await otpProvider.sendOtp(phone); return res.status(202).json({ data: { phone, expiresInSeconds: env.OTP_TTL_MINUTES * 60 } }); } const code = '123456'; await Otp.deleteMany({ phone }); await Otp.create({ phone, codeHash: hash(code), expiresAt: new Date(Date.now() + env.OTP_TTL_MINUTES * 60000) }); res.status(202).json({ data: { phone, expiresInSeconds: env.OTP_TTL_MINUTES * 60, ...(env.EXPOSE_DEV_OTP ? { developmentCode: code } : {}) } }); }
 async function verifyOtp(req, res) {
   if (env.PHONE_AUTH_MODE !== 'server') throw new AppError(409, 'PHONE_AUTH_PROVIDER_DISABLED', 'Server SMS verification is currently disabled.');
   const body = z.object({ phone: phoneSchema, code: z.string().regex(/^\d{6}$/), studioName: z.string().trim().min(2).max(80).optional(), referralCode: z.string().trim().toUpperCase().max(10).optional(), garmentAudiences: z.array(z.enum(['men', 'women', 'kids', 'unisex'])).min(1).max(4).optional() }).parse(req.body);
-  if (useOtpProvider()) { if (!await otpProvider.verifyOtp(body.phone, body.code)) throw new AppError(401, 'OTP_INVALID', 'The code is invalid or expired.'); } else { const otp = await Otp.findOne({ phone: body.phone }).sort({ createdAt: -1 }); if (!otp || otp.expiresAt < new Date() || otp.codeHash !== hash(body.code)) throw new AppError(401, 'OTP_INVALID', 'The code is invalid or expired.'); await Otp.deleteMany({ phone: body.phone }); }
+  if (isDemoLogin(body.phone)) { if (body.code !== '111111') throw new AppError(401, 'OTP_INVALID', 'The code is invalid or expired.'); } else if (useOtpProvider()) { if (!await otpProvider.verifyOtp(body.phone, body.code)) throw new AppError(401, 'OTP_INVALID', 'The code is invalid or expired.'); } else { const otp = await Otp.findOne({ phone: body.phone }).sort({ createdAt: -1 }); if (!otp || otp.expiresAt < new Date() || otp.codeHash !== hash(body.code)) throw new AppError(401, 'OTP_INVALID', 'The code is invalid or expired.'); await Otp.deleteMany({ phone: body.phone }); }
   return finishPhoneAuthentication(body.phone, body, res);
 }
 async function finishPhoneAuthentication(phone, input, res) {
@@ -72,7 +75,11 @@ async function finishPhoneAuthentication(phone, input, res) {
       isNew = true;
     }
   }
-  const needsOnboarding = member.role === 'owner'
+  if (isDemoLogin(phone)) {
+    await seedDemoStudio({ user, studio });
+    isNew = false;
+  }
+  const needsOnboarding = !isDemoLogin(phone) && member.role === 'owner'
     && (isNew || (!studio.onboardingCompletedAt && studio.name === 'My Studio'));
   const tokens = await issueSession(user, member); res.json({ data: { ...tokens, isNew, accountRestored, needsOnboarding, user: { id: user.id, phone: user.phone, name: user.name, language: user.language }, studioId: member.studioId, role: member.role } });
 }
