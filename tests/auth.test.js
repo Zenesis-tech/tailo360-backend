@@ -1444,3 +1444,31 @@ test('a capped new-studio subscription offer is claimed only up to its limit', a
   expect(promoted[0].promotion.code).toBe('LAUNCH_ONE');
   expect((await SubscriptionOffer.findById(offer._id)).redemptionCount).toBe(1);
 });
+
+test('support config is available to signed-in studios and contact support creates an admin ticket', async () => {
+  const account = await createAccount('+919876544103');
+  const { AppConfig, SupportTicket } = require('../src/models');
+  await AppConfig.findOneAndUpdate(
+    { key: 'platform' },
+    { key: 'platform', support: { whatsappNumber: '+919876543210', deliveryMode: 'both' } },
+    { upsert: true },
+  );
+  const config = await request(app)
+    .get('/api/v1/support/config')
+    .set('Authorization', `Bearer ${account.body.data.accessToken}`)
+    .expect(200);
+  expect(config.body.data).toMatchObject({
+    whatsappNumber: '+919876543210',
+    deliveryMode: 'both',
+  });
+  await request(app)
+    .post('/api/v1/support/tickets')
+    .set('Authorization', `Bearer ${account.body.data.accessToken}`)
+    .send({
+      subject: 'Need help with an order',
+      category: 'order_workflow',
+      message: 'Please help me update a customer order.',
+    })
+    .expect(201);
+  expect(await SupportTicket.countDocuments({ studioId: account.body.data.studioId })).toBe(1);
+});

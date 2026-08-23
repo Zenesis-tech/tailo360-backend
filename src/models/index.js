@@ -716,6 +716,14 @@ const appConfigSchema = new Schema(
     minimumAndroidVersion: String,
     minimumIosVersion: String,
     featureFlags: { type: Map, of: Boolean },
+    support: {
+      whatsappNumber: String,
+      deliveryMode: {
+        type: String,
+        enum: ["ticket", "whatsapp", "both"],
+        default: "ticket",
+      },
+    },
   },
   base,
 );

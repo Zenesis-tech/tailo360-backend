@@ -1041,11 +1041,21 @@ const configInput = z.object({
   minimumAndroidVersion: z.string().max(50).optional(),
   minimumIosVersion: z.string().max(50).optional(),
   featureFlags: z.record(z.boolean()).default({}),
+  support: z.object({
+    whatsappNumber: z.string().trim().transform((value) => value.replace(/\s|-/g, '')).refine((value) => value === '' || /^\+?[1-9]\d{9,14}$/.test(value), 'Use a valid WhatsApp number.').transform((value) => value === '' || value.startsWith('+') ? value : `+91${value}`),
+    deliveryMode: z.enum(['ticket', 'whatsapp', 'both']).default('ticket'),
+  }).default({ whatsappNumber: '', deliveryMode: 'ticket' }),
+}).superRefine((value, context) => {
+  if (['whatsapp', 'both'].includes(value.support.deliveryMode) && !value.support.whatsappNumber) {
+    context.addIssue({ code: 'custom', path: ['support', 'whatsappNumber'], message: 'A WhatsApp number is required for this delivery mode.' });
+  }
 });
 async function config(req, res) {
   const row = await AppConfig.findOne({ key: "platform" });
   res.json({
-    data: row || { key: "platform", maintenance: false, featureFlags: {} },
+    data: row
+      ? { ...row.toObject(), support: { whatsappNumber: '', deliveryMode: 'ticket', ...(row.support?.toObject?.() || row.support || {}) } }
+      : { key: "platform", maintenance: false, featureFlags: {}, support: { whatsappNumber: '', deliveryMode: 'ticket' } },
   });
 }
 async function updateConfig(req, res) {

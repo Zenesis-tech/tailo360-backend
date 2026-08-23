@@ -23,6 +23,7 @@ const notifications = wrapController(require("../controllers/notification.contro
 const webhooks = wrapController(require("../controllers/store-webhook.controller"));
 const sync = wrapController(require("../controllers/sync.controller"));
 const subscriptionController = require("../controllers/subscription.controller");
+const supportController = require("../controllers/support.controller");
 const subscriptions = wrapController(subscriptionController);
 const admin = wrapController(require("../controllers/admin.controller"));
 const backups = wrapController(require("../controllers/backup.controller"));
@@ -48,6 +49,8 @@ router.get("/auth/me", authenticate, auth.me);
 router.get("/dashboard", authenticate, ops.dashboard);
 router.get("/calendar", authenticate, ops.schedule);
 router.post("/devices", authenticate, notifications.register);
+router.get("/support/config", authenticate, supportController.config);
+router.post("/support/tickets", authenticate, supportController.createTicket);
 router.delete("/devices", authenticate, notifications.unregister);
 router.get("/notifications", authenticate, notifications.list);
 router.get("/notifications/unread-count", authenticate, notifications.unreadCount);
