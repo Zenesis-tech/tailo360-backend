@@ -5,7 +5,9 @@ const {
   Price,
   GarmentTemplate,
   Studio,
+  Member,
 } = require('../models');
+const { createStudioFor } = require('./auth.service');
 
 const demoPhone = '+919876543210';
 
@@ -13,9 +15,65 @@ function isDemoPhone(phone) {
   return phone === demoPhone;
 }
 
+async function ensureDemoStudio(user) {
+  let studio = await Studio.findOne({
+    ownerUserId: user._id,
+    isDemoAccount: true,
+  });
+  let owner;
+  if (!studio) {
+    // Adopt a demo studio created by the earlier seed implementation, but do
+    // not reuse an ordinary studio that happened to belong to the demo phone.
+    studio = await Studio.findOne({
+      ownerUserId: user._id,
+      name: 'Tailo360 Demo Studio',
+    });
+    if (studio) {
+      studio.isDemoAccount = true;
+      await studio.save();
+    } else {
+      const created = await createStudioFor(user, {
+        studioName: 'Tailo360 Demo Studio',
+        garmentAudiences: ['men', 'women', 'unisex'],
+      });
+      studio = created.studio;
+      owner = created.owner;
+      studio.isDemoAccount = true;
+      await studio.save();
+    }
+  }
+  owner ??= await Member.findOneAndUpdate(
+    { studioId: studio._id, userId: user._id },
+    {
+      $set: { role: 'owner', status: 'active', phone: demoPhone },
+      $setOnInsert: { name: user.name || 'Demo Owner' },
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+  // The public demo identity must resolve deterministically even while an
+  // older API deployment still selects the first active membership. Retire
+  // only this demo user's non-demo memberships; ordinary users are untouched.
+  await Member.updateMany(
+    {
+      userId: user._id,
+      studioId: { $ne: studio._id },
+      status: { $in: ['active', 'limited'] },
+    },
+    { $set: { status: 'removed' } },
+  );
+  return { studio, owner };
+}
+
 async function seedDemoStudio({ user, studio }) {
-  const existing = await Customer.countDocuments({ studioId: studio._id });
-  if (existing > 0) return;
+  const [existingCustomers, existingOrders] = await Promise.all([
+    Customer.countDocuments({ studioId: studio._id, deletedAt: null }),
+    Order.countDocuments({ studioId: studio._id, deletedAt: null }),
+  ]);
+  if (
+    studio.demoSeedVersion === 1 &&
+    existingCustomers >= 5 &&
+    existingOrders >= 5
+  ) return;
 
   await Studio.updateOne(
     { _id: studio._id },
@@ -25,7 +83,8 @@ async function seedDemoStudio({ user, studio }) {
         address: 'Shivaji Nagar, Pune, Maharashtra',
         onboardingCompletedAt: new Date(),
         invoicePrefix: 'DEMO-',
-        orderSequence: 3,
+        orderSequence: 1005,
+        isDemoAccount: true,
       },
     },
   );
@@ -36,6 +95,16 @@ async function seedDemoStudio({ user, studio }) {
     audience: { $in: ['men', 'women', 'unisex'] },
   }).sort({ name: 1 }).limit(3);
   if (!templates.length) return;
+
+  // This studio is reserved exclusively for the public demo identity. Repair
+  // an incomplete or legacy seed as one coherent dataset without touching any
+  // ordinary studio previously associated with the same phone number.
+  await Promise.all([
+    Measurement.deleteMany({ studioId: studio._id }),
+    Order.deleteMany({ studioId: studio._id }),
+    Customer.deleteMany({ studioId: studio._id }),
+    Price.deleteMany({ studioId: studio._id }),
+  ]);
 
   const priceByTemplate = new Map();
   for (const [index, template] of templates.entries()) {
@@ -104,6 +173,15 @@ async function seedDemoStudio({ user, studio }) {
     });
   }
   await Order.insertMany(orders);
+  await Studio.updateOne(
+    { _id: studio._id },
+    { $set: { demoSeedVersion: 1 } },
+  );
 }
 
-module.exports = { demoPhone, isDemoPhone, seedDemoStudio };
+module.exports = {
+  demoPhone,
+  isDemoPhone,
+  ensureDemoStudio,
+  seedDemoStudio,
+};

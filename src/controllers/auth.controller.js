@@ -9,10 +9,10 @@ const { hash, createStudioFor, issueSession } = require('../services/auth.servic
 const otpProvider = require('../services/otp-provider.service');
 const { verifyPassword } = require('../services/password.service');
 const { firebaseAdmin } = require('../services/firebase-admin.service');
-const { isDemoPhone, seedDemoStudio } = require('../services/demo-account.service');
+const { isDemoPhone, ensureDemoStudio, seedDemoStudio } = require('../services/demo-account.service');
 const useOtpProvider = () => env.NODE_ENV === 'production' || env.OTP_DELIVERY_MODE === 'provider';
 const isDemoLogin = (phone) =>
-  env.NODE_ENV !== 'production' && env.DEMO_ACCOUNT_ENABLED && isDemoPhone(phone);
+  env.DEMO_ACCOUNT_ENABLED && isDemoPhone(phone);
 const phoneSchema = z.string().trim().transform((value) => value.replace(/\s|-/g, '')).refine((value) => /^\+?[1-9]\d{9,14}$/.test(value), 'Use a valid mobile number.').transform((value) => value.startsWith('+') ? value : `+91${value}`);
 const accountRecoveryWindowMs = 30 * 24 * 60 * 60 * 1000;
 
@@ -76,6 +76,7 @@ async function finishPhoneAuthentication(phone, input, res) {
     }
   }
   if (isDemoLogin(phone)) {
+    ({ studio, owner: member } = await ensureDemoStudio(user));
     await seedDemoStudio({ user, studio });
     isNew = false;
   }

@@ -266,9 +266,20 @@ test('account deletion signs the user out and login within 30 days restores it',
   expect(user.deletionRequestedAt).toBeNull();
 });
 
-test('the enabled development demo account seeds a reusable studio', async () => {
+test('the enabled demo account uses an isolated, reusable seeded studio', async () => {
   const env = require('../src/config/env');
   const previous = env.DEMO_ACCOUNT_ENABLED;
+  env.DEMO_ACCOUNT_ENABLED = false;
+  await createAccount('9876543210');
+  const { User, Member, Studio, Customer } = require('../src/models');
+  const demoUser = await User.findOne({ phone: '+919876543210' });
+  const oldMembership = await Member.findOne({ userId: demoUser._id });
+  const oldStudio = await Studio.findById(oldMembership.studioId);
+  await Customer.create({
+    studioId: oldStudio._id,
+    name: 'Previous account customer',
+    phone: '+919000000001',
+  });
   env.DEMO_ACCOUNT_ENABLED = true;
   try {
     await request(app)
@@ -281,6 +292,8 @@ test('the enabled development demo account seeds a reusable studio', async () =>
       .expect(200);
     expect(verified.body.data.isNew).toBe(false);
     expect(verified.body.data.needsOnboarding).toBe(false);
+    expect(verified.body.data.studioId).not.toBe(oldStudio.id);
+    expect((await Member.findById(oldMembership._id)).status).toBe('removed');
     const token = verified.body.data.accessToken;
     const customers = await request(app)
       .get('/api/v1/customers')
@@ -292,6 +305,11 @@ test('the enabled development demo account seeds a reusable studio', async () =>
       .expect(200);
     expect(customers.body.data.length).toBeGreaterThanOrEqual(5);
     expect(orders.body.data.length).toBeGreaterThanOrEqual(5);
+    expect(
+      customers.body.data.some(
+        (customer) => customer.name === 'Previous account customer',
+      ),
+    ).toBe(false);
   } finally {
     env.DEMO_ACCOUNT_ENABLED = previous;
   }

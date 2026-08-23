@@ -56,6 +56,8 @@ const studioSchema = new Schema(
     invoicePrefix: { type: String, default: "TL-" },
     referralCode: { type: String, required: true, unique: true },
     orderSequence: { type: Number, default: 0 },
+    isDemoAccount: { type: Boolean, default: false, index: true },
+    demoSeedVersion: { type: Number, default: 0 },
     settings: {
       measurementUnit: { type: String, enum: ["in", "cm"], default: "in" },
       precision: {
