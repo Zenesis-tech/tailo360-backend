@@ -1,5 +1,5 @@
-const { Order, Referral, Studio, Subscription } = require("../models");
-const { send } = require("./notification.service");
+const { Order, Referral, Studio, Subscription, Notification } = require("../models");
+const { send, schedule, deliverScheduled } = require("./notification.service");
 const { pruneStaleDevices } = require("./notification.service");
 const {
   expireReferrals,
@@ -31,6 +31,59 @@ function notify(studioId, message) {
   return send(studioId, { ...message, source: "reminder" });
 }
 
+function reminderMoment(date, daysBefore = 0) {
+  if (!date) return null;
+  const day = istDay(-daysBefore, date);
+  // Date-only order values are stored at midnight IST. Notify at 08:00 IST.
+  return new Date(day.getTime() + 8 * 60 * 60 * 1000);
+}
+
+async function scheduleOrderReminders(order, notifications = {}) {
+  await Notification.deleteMany({
+    studioId: order.studioId,
+    "data.orderId": order.id,
+    source: "reminder",
+    status: "queued",
+    scheduledFor: { $ne: null },
+  });
+  if (["delivered", "cancelled"].includes(order.status)) return;
+  const route = { route: "order", orderId: order.id };
+  const customer = order.customerId?.name ? ` for ${order.customerId.name}` : "";
+  const tasks = [];
+  if (notifications.delivery !== false && order.deliveryDate) {
+    tasks.push(schedule(order.studioId, {
+      type: "delivery_due_soon",
+      title: "Delivery due soon",
+      body: `${order.code}${customer} is due for delivery soon.`,
+      data: route,
+      source: "reminder",
+      scheduledFor: reminderMoment(order.deliveryDate, 2),
+      dedupeKey: `delivery:${dayKey(order.deliveryDate)}:${order.id}`,
+    }));
+  }
+  if (notifications.trial !== false && order.trialDate) {
+    tasks.push(schedule(order.studioId, {
+      type: "trial_due_today",
+      title: "Trial scheduled today",
+      body: `${order.code}${customer} has a trial today.`,
+      data: route,
+      source: "reminder",
+      scheduledFor: reminderMoment(order.trialDate),
+      dedupeKey: `trial:${order.id}:${dayKey(order.trialDate)}`,
+    }));
+  }
+  await Promise.all(tasks);
+}
+
+async function rescheduleStudioOrderReminders(studioId, notifications = {}) {
+  const orders = await Order.find({
+    studioId,
+    status: { $nin: ["delivered", "cancelled"] },
+    deletedAt: null,
+  });
+  await Promise.all(orders.map((order) => scheduleOrderReminders(order, notifications)));
+}
+
 async function runOrderReminders(now) {
   const today = istDay(0, now);
   const tomorrow = istDay(1, now);
@@ -57,7 +110,7 @@ async function runOrderReminders(now) {
     const settings = studios.get(String(order.studioId))?.settings?.notifications;
     const route = { route: "order", orderId: order.id };
     const customer = order.customerId?.name ? ` for ${order.customerId.name}` : "";
-    if (order.reminderDate >= today && order.reminderDate < tomorrow) {
+    if (settings?.delivery !== false && order.reminderDate >= today && order.reminderDate < tomorrow) {
       await notify(order.studioId, {
         type: "order_reminder",
         title: "Order reminder",
@@ -164,8 +217,9 @@ async function runReminders(now = new Date()) {
   // users at midnight; once 08:00 IST has passed, recurring checks catch both
   // newly-added reminders and same-day checks missed during API downtime.
   if (istHour(now) < 8) return;
+  await deliverScheduled(now);
   await runOrderReminders(now);
   await runAccountReminders(now);
 }
 
-module.exports = { runReminders, istDay, dayKey, istHour };
+module.exports = { runReminders, istDay, dayKey, istHour, scheduleOrderReminders, rescheduleStudioOrderReminders };

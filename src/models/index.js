@@ -672,6 +672,10 @@ const notificationSchema = new Schema(
     deliveredCount: { type: Number, default: 0 },
     failureCount: { type: Number, default: 0 },
     sentAt: Date,
+    // A queued reminder is visible in the in-app notification queue before
+    // it is delivered. The reminder job changes it to sent/stored at this
+    // time instead of creating an unrelated second notification.
+    scheduledFor: { type: Date, index: true },
     error: String,
     createdBy: { type: Schema.Types.ObjectId, ref: "User" },
   },

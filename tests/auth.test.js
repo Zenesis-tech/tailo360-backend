@@ -661,6 +661,43 @@ test('same-day order reminders are caught after 8 AM and remain deduplicated', a
   });
 });
 
+test('delivery and trial switches create or remove queued order reminders', async () => {
+  const account = await createAccount('+919876543232');
+  const { Customer, Notification, Order } = require('../src/models');
+  const { scheduleOrderReminders } = require('../src/services/reminder-jobs.service');
+  const studioId = account.body.data.studioId;
+  const customer = await Customer.create({
+    studioId,
+    name: 'Scheduled Reminder Customer',
+    phone: '+919000000232',
+  });
+  const order = await Order.create({
+    studioId,
+    customerId: customer._id,
+    code: 'REM-232',
+    orderDate: new Date('2026-08-20T00:00:00.000Z'),
+    trialDate: new Date('2026-08-22T00:00:00.000Z'),
+    deliveryDate: new Date('2026-08-24T00:00:00.000Z'),
+    lines: [],
+    payments: [],
+    totalPaise: 0,
+  });
+
+  await scheduleOrderReminders(order, { delivery: true, trial: true });
+  const queued = await Notification.find({
+    'data.orderId': order.id,
+    status: 'queued',
+  }).sort({ type: 1 });
+  expect(queued).toHaveLength(2);
+  expect(queued.map((item) => item.scheduledFor instanceof Date)).toEqual([true, true]);
+
+  await scheduleOrderReminders(order, { delivery: false, trial: false });
+  expect(await Notification.countDocuments({
+    'data.orderId': order.id,
+    status: 'queued',
+  })).toBe(0);
+});
+
 test('FCM device registration refreshes metadata and can be deactivated', async () => {
   const account = await createAccount('+919876543233');
   const token = `test-fcm-token-${'x'.repeat(40)}`;

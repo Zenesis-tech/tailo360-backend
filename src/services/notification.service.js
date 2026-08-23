@@ -43,6 +43,7 @@ async function createRecipientNotification(studioId, userId, message) {
     dedupeKey: message.dedupeKey,
     createdBy: message.createdBy,
     status: "queued",
+    scheduledFor: message.scheduledFor,
   };
   if (!message.dedupeKey) return Notification.create(values);
   const existing = await Notification.findOne({
@@ -57,6 +58,40 @@ async function createRecipientNotification(studioId, userId, message) {
     if (error?.code === 11000) return null;
     throw error;
   }
+}
+
+async function schedule(studioId, message) {
+  const users = await studioUserIds(studioId, message.userIds);
+  const recipients = message.excludeUserId
+    ? users.filter((id) => id !== String(message.excludeUserId))
+    : users;
+  const notifications = (await Promise.all(recipients.map((userId) =>
+    createRecipientNotification(studioId, userId, message),
+  ))).filter(Boolean);
+  await Promise.all(notifications.map((notification) => realtimeEvents.publish(studioId, {
+    resource: "notifications",
+    action: "created",
+    id: notification.id,
+    data: notification,
+  }, { userIds: [notification.userId] })));
+  return notifications;
+}
+
+async function deliverScheduled(now = new Date()) {
+  const notifications = await Notification.find({
+    status: "queued",
+    scheduledFor: { $ne: null, $lte: now },
+  });
+  await Promise.all(notifications.map(async (notification) => {
+    await deliver(notification);
+    await realtimeEvents.publish(notification.studioId, {
+      resource: "notifications",
+      action: "updated",
+      id: notification.id,
+      data: notification,
+    }, { userIds: [notification.userId] });
+  }));
+  return notifications.length;
 }
 
 async function deliver(notification) {
@@ -195,4 +230,4 @@ async function pruneStaleDevices(now = new Date()) {
   );
 }
 
-module.exports = { send, sendAcrossStudios, deliver, pruneStaleDevices };
+module.exports = { send, schedule, sendAcrossStudios, deliver, deliverScheduled, pruneStaleDevices };

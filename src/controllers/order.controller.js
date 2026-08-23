@@ -5,6 +5,7 @@ const { canTransition } = require("../utils/order-status");
 const { escapedSearch } = require("../utils/search");
 const { maxFabricPhotosPerGarment } = require("../config/order-limits");
 const workflowNotifications = require("../services/workflow-notifications.service");
+const { scheduleOrderReminders } = require("../services/reminder-jobs.service");
 const measurementValue = z
   .string()
   .trim()
@@ -204,6 +205,7 @@ async function create(req, res) {
       : [],
     activity: [{ type: "created", actorId: req.auth.user._id }],
   });
+  await scheduleOrderReminders(order, studio.settings.notifications);
   workflowNotifications.orderCreated(order, customer, req.auth.user._id);
   res.status(201).json({ data: await serializePopulated(order) });
 }
@@ -303,6 +305,7 @@ async function update(req, res) {
   }
   order.activity.push({ type: "edited", actorId: req.auth.user._id });
   await order.save();
+  await scheduleOrderReminders(order, req.auth.studio.settings.notifications);
   workflowNotifications.orderUpdated(order, req.auth.user._id);
   res.json({ data: await serializePopulated(order) });
 }
@@ -352,6 +355,7 @@ async function changeStatus(req, res) {
     actorId: req.auth.user._id,
   });
   await order.save();
+  await scheduleOrderReminders(order, req.auth.studio.settings.notifications);
   workflowNotifications.orderStatusChanged(
     order,
     previous,
@@ -407,6 +411,7 @@ async function cancel(req, res) {
     actorId: req.auth.user._id,
   });
   await order.save();
+  await scheduleOrderReminders(order, req.auth.studio.settings.notifications);
   workflowNotifications.orderStatusChanged(
     order,
     previous,
@@ -475,6 +480,7 @@ async function handover(req, res) {
     actorId: req.auth.user._id,
   });
   await order.save();
+  await scheduleOrderReminders(order, req.auth.studio.settings.notifications);
   workflowNotifications.orderStatusChanged(
     order,
     "ready",
