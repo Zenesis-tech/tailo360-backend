@@ -31,7 +31,9 @@ async function claimExpiredUser(userId, now) {
   return User.findOneAndUpdate(
     {
       _id: userId,
-      deletionScheduledFor: { $lte: now },
+      // Non-null means deletion was requested. This also drains requests
+      // created by the former delayed-deletion flow.
+      deletionScheduledFor: { $ne: null },
       $or: [
         { purgeStartedAt: null },
         { purgeStartedAt: { $exists: false } },
@@ -230,7 +232,9 @@ async function purgeAccount(userId, now = new Date()) {
 
 async function purgeExpiredAccounts(now = new Date(), { limit = 20 } = {}) {
   const candidates = await User.find({
-    deletionScheduledFor: { $lte: now },
+    // Account deletion is immediate; the marker is retained only while a
+    // purge is being retried after an infrastructure failure.
+    deletionScheduledFor: { $ne: null },
     $or: [
       { purgeStartedAt: null },
       { purgeStartedAt: { $exists: false } },

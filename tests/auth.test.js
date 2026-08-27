@@ -245,29 +245,25 @@ test('language preference persists and is returned by the authenticated profile'
   expect(invalid.body.error.code).toBe('VALIDATION_ERROR');
 });
 
-test('account deletion signs the user out and login within 30 days restores it', async () => {
+test('account deletion immediately removes the account and studio data', async () => {
   const phone = '+919876543212';
   const verified = await createAccount(phone);
   const authorization = `Bearer ${verified.body.data.accessToken}`;
 
-  const scheduled = await request(app)
+  const deleted = await request(app)
     .delete('/api/v1/users/me')
     .set('Authorization', authorization)
     .expect(200);
-  expect(new Date(scheduled.body.data.recoveryUntil).getTime()).toBeGreaterThan(
-    Date.now() + 29 * 24 * 60 * 60 * 1000,
-  );
+  expect(deleted.body.data.deletedAt).toBeTruthy();
   await request(app)
     .get('/api/v1/auth/me')
     .set('Authorization', authorization)
     .expect(401);
 
-  const restored = await createAccount(phone);
-  expect(restored.body.data.accountRestored).toBe(true);
-  const { User } = require('../src/models');
-  const user = await User.findOne({ phone });
-  expect(user.deletionScheduledFor).toBeNull();
-  expect(user.deletionRequestedAt).toBeNull();
+  const { User, Studio, Member } = require('../src/models');
+  expect(await User.findOne({ phone })).toBeNull();
+  expect(await Studio.findById(verified.body.data.studioId)).toBeNull();
+  expect(await Member.findOne({ studioId: verified.body.data.studioId })).toBeNull();
 });
 
 test('expired owner deletion permanently purges the studio, CRM data and media', async () => {

@@ -10,28 +10,19 @@ const otpProvider = require('../services/otp-provider.service');
 const { verifyPassword } = require('../services/password.service');
 const { firebaseAdmin } = require('../services/firebase-admin.service');
 const { isDemoPhone, ensureDemoStudio, seedDemoStudio } = require('../services/demo-account.service');
+const { purgeAccount } = require('../services/account-purge.service');
 const useOtpProvider = () => env.NODE_ENV === 'production' || env.OTP_DELIVERY_MODE === 'provider';
 const isDemoLogin = (phone) =>
   env.DEMO_ACCOUNT_ENABLED && isDemoPhone(phone);
 const phoneSchema = z.string().trim().transform((value) => value.replace(/\s|-/g, '')).refine((value) => /^\+?[1-9]\d{9,14}$/.test(value), 'Use a valid mobile number.').transform((value) => value.startsWith('+') ? value : `+91${value}`);
-const accountRecoveryWindowMs = 30 * 24 * 60 * 60 * 1000;
-
 async function restoreAccountIfEligible(user) {
   if (user.deletedAt) {
     throw new AppError(403, 'ACCOUNT_DELETED', 'This account has been permanently deleted.');
   }
-  if (!user.deletionScheduledFor) return false;
-  if (user.deletionScheduledFor <= new Date()) {
-    user.deletedAt = new Date();
-    await user.save();
+  if (user.deletionScheduledFor) {
     throw new AppError(403, 'ACCOUNT_DELETED', 'This account has been permanently deleted.');
   }
-  user.deletionRequestedAt = null;
-  user.deletionScheduledFor = null;
-  user.purgeStartedAt = null;
-  user.purgeLastError = null;
-  await user.save();
-  return true;
+  return false;
 }
 function authConfig(req, res) { res.json({ data: { phoneAuthMode: env.PHONE_AUTH_MODE } }); }
 async function requestOtp(req, res) { if (env.PHONE_AUTH_MODE !== 'server') throw new AppError(409, 'PHONE_AUTH_PROVIDER_DISABLED', 'Server SMS verification is currently disabled.'); const phone = phoneSchema.parse(req.body.phone); if (isDemoLogin(phone)) return res.status(202).json({ data: { phone, expiresInSeconds: env.OTP_TTL_MINUTES * 60, demo: true } }); if (useOtpProvider()) { await otpProvider.sendOtp(phone); return res.status(202).json({ data: { phone, expiresInSeconds: env.OTP_TTL_MINUTES * 60 } }); } const code = '123456'; await Otp.deleteMany({ phone }); await Otp.create({ phone, codeHash: hash(code), expiresAt: new Date(Date.now() + env.OTP_TTL_MINUTES * 60000) }); res.status(202).json({ data: { phone, expiresInSeconds: env.OTP_TTL_MINUTES * 60, ...(env.EXPOSE_DEV_OTP ? { developmentCode: code } : {}) } }); }
@@ -159,15 +150,16 @@ async function updatePreferences(req, res) {
 }
 async function scheduleAccountDeletion(req, res) {
   const now = new Date();
-  const recoverUntil = new Date(now.getTime() + accountRecoveryWindowMs);
   req.auth.user.deletionRequestedAt = now;
-  req.auth.user.deletionScheduledFor = recoverUntil;
+  // Set the marker to now so deletion never depends on a later cron run.
+  req.auth.user.deletionScheduledFor = now;
   req.auth.user.purgeStartedAt = null;
   req.auth.user.purgeLastError = null;
   await Promise.all([
     req.auth.user.save(),
     Session.updateMany({ userId: req.auth.user._id, revokedAt: null }, { revokedAt: now }),
   ]);
-  res.json({ data: { recoveryUntil: recoverUntil.toISOString() } });
+  await purgeAccount(req.auth.user._id, now);
+  res.json({ data: { deletedAt: now.toISOString() } });
 }
 module.exports = { authConfig, requestOtp, verifyOtp, firebasePhone, google, adminLogin, refresh, logout, me, updatePreferences, scheduleAccountDeletion };
