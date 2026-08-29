@@ -57,4 +57,15 @@ const schema = z.object({
 
 const parsed = schema.safeParse(process.env);
 if (!parsed.success) throw new Error(`Invalid environment: ${parsed.error.message}`);
-module.exports = { ...parsed.data, APPLE_PRIVATE_KEY: parsed.data.APPLE_PRIVATE_KEY.replace(/\\n/g, '\n'), ALLOWED_ORIGINS: parsed.data.ALLOWED_ORIGINS.split(',').filter(Boolean), GOOGLE_CLIENT_IDS: parsed.data.GOOGLE_CLIENT_IDS.split(',').map((value) => value.trim()).filter(Boolean) };
+module.exports = {
+  ...parsed.data,
+  APPLE_PRIVATE_KEY: parsed.data.APPLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+  ALLOWED_ORIGINS: parsed.data.ALLOWED_ORIGINS
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean),
+  GOOGLE_CLIENT_IDS: parsed.data.GOOGLE_CLIENT_IDS
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean),
+};
