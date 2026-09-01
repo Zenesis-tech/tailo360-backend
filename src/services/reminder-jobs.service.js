@@ -6,39 +6,88 @@ const {
   refreshSubscription,
 } = require("./subscription-lifecycle.service");
 
-const istOffsetMs = 330 * 60 * 1000;
+const DEFAULT_TIMEZONE = "Asia/Kolkata";
+const REMINDER_HOUR = 9;
 
-function istDay(offset = 0, now = new Date()) {
-  const shifted = new Date(now.getTime() + istOffsetMs);
-  return new Date(
-    Date.UTC(
-      shifted.getUTCFullYear(),
-      shifted.getUTCMonth(),
-      shifted.getUTCDate() + offset,
-    ) - istOffsetMs,
+function zonedParts(date = new Date(), timezone = DEFAULT_TIMEZONE) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  return Object.fromEntries(
+    parts
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, Number(part.value)]),
   );
 }
 
-function dayKey(date = new Date()) {
-  return new Date(date.getTime() + istOffsetMs).toISOString().slice(0, 10);
+function zonedDateTime(year, month, day, hour, timezone = DEFAULT_TIMEZONE) {
+  const desired = Date.UTC(year, month - 1, day, hour);
+  let result = new Date(desired);
+  // Two passes account for timezone offsets and daylight-saving transitions.
+  for (let pass = 0; pass < 2; pass += 1) {
+    const actual = zonedParts(result, timezone);
+    const represented = Date.UTC(
+      actual.year,
+      actual.month - 1,
+      actual.day,
+      actual.hour,
+      actual.minute,
+      actual.second,
+    );
+    result = new Date(result.getTime() + desired - represented);
+  }
+  return result;
 }
 
-function istHour(date = new Date()) {
-  return new Date(date.getTime() + istOffsetMs).getUTCHours();
+function zonedDay(offset = 0, now = new Date(), timezone = DEFAULT_TIMEZONE) {
+  const local = zonedParts(now, timezone);
+  const shifted = new Date(Date.UTC(local.year, local.month - 1, local.day + offset));
+  return zonedDateTime(
+    shifted.getUTCFullYear(),
+    shifted.getUTCMonth() + 1,
+    shifted.getUTCDate(),
+    0,
+    timezone,
+  );
+}
+
+function dayKey(date = new Date(), timezone = DEFAULT_TIMEZONE) {
+  const local = zonedParts(date, timezone);
+  return `${local.year}-${String(local.month).padStart(2, "0")}-${String(local.day).padStart(2, "0")}`;
+}
+
+function localHour(date = new Date(), timezone = DEFAULT_TIMEZONE) {
+  return zonedParts(date, timezone).hour;
 }
 
 function notify(studioId, message) {
   return send(studioId, { ...message, source: "reminder" });
 }
 
-function reminderMoment(date, daysBefore = 0) {
+function reminderMoment(date, daysBefore = 0, timezone = DEFAULT_TIMEZONE) {
   if (!date) return null;
-  const day = istDay(-daysBefore, date);
-  // Date-only order values are stored at midnight IST. Notify at 08:00 IST.
-  return new Date(day.getTime() + 8 * 60 * 60 * 1000);
+  const local = zonedParts(date, timezone);
+  const shifted = new Date(Date.UTC(local.year, local.month - 1, local.day - daysBefore));
+  return zonedDateTime(
+    shifted.getUTCFullYear(),
+    shifted.getUTCMonth() + 1,
+    shifted.getUTCDate(),
+    REMINDER_HOUR,
+    timezone,
+  );
 }
 
-async function scheduleOrderReminders(order, notifications = {}) {
+async function scheduleOrderReminders(order, notifications = {}, configuredTimezone) {
+  const timezone = configuredTimezone ||
+    (await Studio.findById(order.studioId).select("settings.timezone"))?.settings?.timezone ||
+    DEFAULT_TIMEZONE;
   await Notification.deleteMany({
     studioId: order.studioId,
     "data.orderId": order.id,
@@ -57,8 +106,8 @@ async function scheduleOrderReminders(order, notifications = {}) {
       body: `${order.code}${customer} is due for delivery soon.`,
       data: route,
       source: "reminder",
-      scheduledFor: reminderMoment(order.deliveryDate, 2),
-      dedupeKey: `delivery:${dayKey(order.deliveryDate)}:${order.id}`,
+      scheduledFor: reminderMoment(order.deliveryDate, 2, timezone),
+      dedupeKey: `delivery:${dayKey(order.deliveryDate, timezone)}:${order.id}`,
     }));
   }
   if (notifications.trial !== false && order.trialDate) {
@@ -68,29 +117,35 @@ async function scheduleOrderReminders(order, notifications = {}) {
       body: `${order.code}${customer} has a trial today.`,
       data: route,
       source: "reminder",
-      scheduledFor: reminderMoment(order.trialDate),
-      dedupeKey: `trial:${order.id}:${dayKey(order.trialDate)}`,
+      scheduledFor: reminderMoment(order.trialDate, 0, timezone),
+      dedupeKey: `trial:${order.id}:${dayKey(order.trialDate, timezone)}`,
     }));
   }
   await Promise.all(tasks);
 }
 
 async function rescheduleStudioOrderReminders(studioId, notifications = {}) {
+  const studio = await Studio.findById(studioId).select("settings.timezone");
+  const timezone = studio?.settings?.timezone || DEFAULT_TIMEZONE;
   const orders = await Order.find({
     studioId,
     status: { $nin: ["delivered", "cancelled"] },
     deletedAt: null,
   });
-  await Promise.all(orders.map((order) => scheduleOrderReminders(order, notifications)));
+  await Promise.all(
+    orders.map((order) => scheduleOrderReminders(order, notifications, timezone)),
+  );
 }
 
 async function runOrderReminders(now) {
-  const today = istDay(0, now);
-  const tomorrow = istDay(1, now);
-  const dayAfterTomorrow = istDay(2, now);
-  const staleBefore = istDay(-2, now);
+  // Use a broad UTC query window, then evaluate each record using its
+  // studio's local calendar below.
+  const broadToday = zonedDay(-1, now);
+  const broadTomorrow = zonedDay(2, now);
+  const broadDayAfterTomorrow = zonedDay(3, now);
+  const broadStaleBefore = zonedDay(-3, now);
   const studios = new Map(
-    (await Studio.find().select("settings.notifications")).map((studio) => [
+    (await Studio.find().select("settings.notifications settings.timezone")).map((studio) => [
       studio.id,
       studio,
     ]),
@@ -99,15 +154,22 @@ async function runOrderReminders(now) {
     status: { $nin: ["delivered", "cancelled"] },
     deletedAt: null,
     $or: [
-      { deliveryDate: { $lt: dayAfterTomorrow } },
-      { trialDate: { $gte: today, $lt: dayAfterTomorrow } },
-      { reminderDate: { $gte: today, $lt: tomorrow } },
-      { updatedAt: { $lt: staleBefore } },
+      { deliveryDate: { $lt: broadDayAfterTomorrow } },
+      { trialDate: { $gte: broadToday, $lt: broadDayAfterTomorrow } },
+      { reminderDate: { $gte: broadToday, $lt: broadTomorrow } },
+      { updatedAt: { $lt: broadStaleBefore } },
     ],
   }).populate("customerId", "name");
 
   for (const order of orders) {
-    const settings = studios.get(String(order.studioId))?.settings?.notifications;
+    const studio = studios.get(String(order.studioId));
+    const timezone = studio?.settings?.timezone || DEFAULT_TIMEZONE;
+    if (localHour(now, timezone) < REMINDER_HOUR) continue;
+    const today = zonedDay(0, now, timezone);
+    const tomorrow = zonedDay(1, now, timezone);
+    const dayAfterTomorrow = zonedDay(2, now, timezone);
+    const staleBefore = zonedDay(-2, now, timezone);
+    const settings = studio?.settings?.notifications;
     const route = { route: "order", orderId: order.id };
     const customer = order.customerId?.name ? ` for ${order.customerId.name}` : "";
     if (settings?.delivery !== false && order.reminderDate >= today && order.reminderDate < tomorrow) {
@@ -116,7 +178,7 @@ async function runOrderReminders(now) {
         title: "Order reminder",
         body: `${order.code}${customer} needs attention today.`,
         data: route,
-        dedupeKey: `order-reminder:${order.id}:${dayKey(today)}`,
+        dedupeKey: `order-reminder:${order.id}:${dayKey(today, timezone)}`,
       });
     }
     if (settings?.delivery !== false && order.deliveryDate < dayAfterTomorrow) {
@@ -127,7 +189,7 @@ async function runOrderReminders(now) {
         title: overdue ? "Delivery overdue" : dueToday ? "Delivery due today" : "Delivery due tomorrow",
         body: `${order.code}${customer} ${overdue ? "is overdue" : "is due soon"}.`,
         data: route,
-        dedupeKey: `delivery:${overdue ? "overdue" : dayKey(order.deliveryDate)}:${order.id}:${overdue ? dayKey(today) : "once"}`,
+        dedupeKey: `delivery:${overdue ? "overdue" : dayKey(order.deliveryDate, timezone)}:${order.id}:${overdue ? dayKey(today, timezone) : "once"}`,
       });
     }
     if (
@@ -142,7 +204,7 @@ async function runOrderReminders(now) {
         title: todayTrial ? "Trial scheduled today" : "Trial scheduled tomorrow",
         body: `${order.code}${customer} has a trial ${todayTrial ? "today" : "tomorrow"}.`,
         data: route,
-        dedupeKey: `trial:${order.id}:${dayKey(order.trialDate)}`,
+        dedupeKey: `trial:${order.id}:${dayKey(order.trialDate, timezone)}`,
       });
     }
     const paid = order.payments.reduce(
@@ -155,7 +217,7 @@ async function runOrderReminders(now) {
         title: "Payment pending",
         body: `${order.code} has ₹${Math.round((order.totalPaise - paid) / 100)} pending.`,
         data: route,
-        dedupeKey: `payment-due:${order.id}:${dayKey(today)}`,
+        dedupeKey: `payment-due:${order.id}:${dayKey(today, timezone)}`,
       });
     }
     if (order.updatedAt < staleBefore && order.deliveryDate >= tomorrow) {
@@ -164,17 +226,26 @@ async function runOrderReminders(now) {
         title: "Work has not progressed",
         body: `${order.code} has remained at ${order.status.replaceAll("_", " ")} for over 2 days.`,
         data: route,
-        dedupeKey: `work-stalled:${order.id}:${dayKey(today)}`,
+        dedupeKey: `work-stalled:${order.id}:${dayKey(today, timezone)}`,
       });
     }
   }
 }
 
 async function runAccountReminders(now) {
-  const today = istDay(0, now);
+  const studios = new Map(
+    (await Studio.find().select("settings.timezone")).map((studio) => [
+      studio.id,
+      studio,
+    ]),
+  );
   for (const subscription of await Subscription.find({
     status: { $in: ["trial", "grace_period"] },
   })) {
+    const timezone = studios.get(String(subscription.studioId))?.settings?.timezone ||
+      DEFAULT_TIMEZONE;
+    if (localHour(now, timezone) < REMINDER_HOUR) continue;
+    const today = zonedDay(0, now, timezone);
     await refreshSubscription(subscription);
     const end = subscription.status === "trial"
       ? subscription.trialEndsAt
@@ -189,37 +260,54 @@ async function runAccountReminders(now) {
         ? "Choose a plan to continue creating and updating records."
         : "Review your plan to avoid interruption.",
       data: { route: "subscription" },
-      dedupeKey: `subscription:${subscription.id}:${dayKey(today)}`,
+      dedupeKey: `subscription:${subscription.id}:${dayKey(today, timezone)}`,
     });
   }
 
   await expireReferrals();
-  const tomorrow = istDay(1, now);
-  const dayAfterTomorrow = istDay(2, now);
   const referrals = await Referral.find({
     status: "pending",
-    expiresAt: { $gte: tomorrow, $lt: dayAfterTomorrow },
   });
   for (const referral of referrals) {
+    const timezone = studios.get(String(referral.referrerStudioId))?.settings?.timezone ||
+      DEFAULT_TIMEZONE;
+    if (localHour(now, timezone) < REMINDER_HOUR) continue;
+    const tomorrow = zonedDay(1, now, timezone);
+    const dayAfterTomorrow = zonedDay(2, now, timezone);
+    if (referral.expiresAt < tomorrow || referral.expiresAt >= dayAfterTomorrow) {
+      continue;
+    }
     await notify(referral.referrerStudioId, {
       type: "referral_expiry",
       title: "Referral reward expiring",
       body: "A pending referral expires tomorrow.",
       data: { route: "referral" },
-      dedupeKey: `referral:${referral.id}:expiry`,
+      dedupeKey: `referral:${referral.id}:expiry:${dayKey(tomorrow, timezone)}`,
     });
   }
 }
 
 async function runReminders(now = new Date()) {
   await pruneStaleDevices(now);
-  // Reminder dates are calendar dates rather than timestamps. Do not wake
-  // users at midnight; once 08:00 IST has passed, recurring checks catch both
-  // newly-added reminders and same-day checks missed during API downtime.
-  if (istHour(now) < 8) return;
-  await deliverScheduled(now);
+  // Scheduled timestamps are already converted from 09:00 in the studio's
+  // timezone. Dynamic reminders are independently gated per studio below.
+  const eligibleStudioIds = (await Studio.find().select("settings.timezone"))
+    .filter((studio) => localHour(
+      now,
+      studio.settings?.timezone || DEFAULT_TIMEZONE,
+    ) >= REMINDER_HOUR)
+    .map((studio) => studio._id);
+  await deliverScheduled(now, { studioIds: eligibleStudioIds });
   await runOrderReminders(now);
   await runAccountReminders(now);
 }
 
-module.exports = { runReminders, istDay, dayKey, istHour, scheduleOrderReminders, rescheduleStudioOrderReminders };
+module.exports = {
+  runReminders,
+  zonedDay,
+  dayKey,
+  localHour,
+  reminderMoment,
+  scheduleOrderReminders,
+  rescheduleStudioOrderReminders,
+};

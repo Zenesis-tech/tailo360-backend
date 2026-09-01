@@ -77,10 +77,12 @@ async function schedule(studioId, message) {
   return notifications;
 }
 
-async function deliverScheduled(now = new Date()) {
+async function deliverScheduled(now = new Date(), { studioIds } = {}) {
+  if (studioIds?.length === 0) return 0;
   const notifications = await Notification.find({
     status: "queued",
     scheduledFor: { $ne: null, $lte: now },
+    ...(studioIds ? { studioId: { $in: studioIds } } : {}),
   });
   await Promise.all(notifications.map(async (notification) => {
     await deliver(notification);

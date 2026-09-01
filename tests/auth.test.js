@@ -894,7 +894,7 @@ test('notification history tracks unread state and supports admin targeting', as
   expect(count.body.data.count).toBe(0);
 });
 
-test('same-day order reminders are caught after 8 AM and remain deduplicated', async () => {
+test('same-day order reminders start at 9 AM studio-local time and remain deduplicated', async () => {
   const account = await createAccount('+919876543234');
   const { Customer, Notification, Order } = require('../src/models');
   const { runReminders } = require('../src/services/reminder-jobs.service');
@@ -917,15 +917,15 @@ test('same-day order reminders are caught after 8 AM and remain deduplicated', a
     totalPaise: 0,
   });
 
-  await runReminders(new Date('2026-08-21T01:30:00.000Z')); // 07:00 IST
+  await runReminders(new Date('2026-08-21T03:29:00.000Z')); // 08:59 IST
   expect(await Notification.countDocuments({
     type: 'order_reminder',
     'data.orderId': order.id,
   })).toBe(0);
 
-  const afterEight = new Date('2026-08-21T04:00:00.000Z'); // 09:30 IST
-  await runReminders(afterEight);
-  await runReminders(afterEight);
+  const nineLocal = new Date('2026-08-21T03:30:00.000Z'); // 09:00 IST
+  await runReminders(nineLocal);
+  await runReminders(nineLocal);
   const reminders = await Notification.find({
     type: 'order_reminder',
     'data.orderId': order.id,
