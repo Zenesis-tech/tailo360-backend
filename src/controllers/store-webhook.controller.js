@@ -4,11 +4,11 @@ const { send: sendNotification } = require('../services/notification.service');
 const realtimeEvents = require('../services/realtime-events.service');
 
 async function applyVerifiedPurchase(verified) {
-  const event = await SubscriptionEvent.findOne({ $or: [{ transactionId: verified.transactionId }, { originalTransactionId: verified.originalTransactionId }] });
+  const event = await SubscriptionEvent.findOne({ $or: [{ transactionId: verified.transactionId }, { originalTransactionId: verified.originalTransactionId }, { purchaseToken: verified.purchaseToken }] }).select('+purchaseToken');
   if (!event) return false; // Unknown transactions are never attached to a studio.
   const plan = await planFor(verified.productId, verified.platform);
-  const subscription = await Subscription.findOneAndUpdate({ studioId: event.studioId }, { plan: plan.code, status: verified.status, platform: verified.platform, entitlementSource: 'store', productId: verified.productId, originalTransactionId: verified.originalTransactionId, periodEndsAt: verified.periodEndsAt, lastVerifiedAt: new Date(), seatLimit: plan.limits.staffSeats }, { new: true });
-  await SubscriptionEvent.create({ studioId: event.studioId, platform: verified.platform, transactionId: `${verified.transactionId}:${Date.now()}`, originalTransactionId: verified.originalTransactionId, productId: verified.productId, raw: verified.raw });
+  const subscription = await Subscription.findOneAndUpdate({ studioId: event.studioId }, { plan: plan.code, status: verified.status, platform: verified.platform, entitlementSource: 'store', productId: verified.productId, googlePlaySubscriptionId: verified.platform === 'google' ? verified.productId : undefined, purchaseToken: verified.purchaseToken, originalTransactionId: verified.originalTransactionId, country: verified.country || event.country, currency: event.currency, priceAmountMicros: event.priceAmountMicros, autoRenewing: verified.autoRenewing, cancellationReason: verified.cancellationReason, periodEndsAt: verified.periodEndsAt, lastVerifiedAt: new Date(), seatLimit: plan.limits.staffSeats }, { new: true });
+  await SubscriptionEvent.create({ studioId: event.studioId, platform: verified.platform, transactionId: `${verified.transactionId}:${Date.now()}`, originalTransactionId: verified.originalTransactionId, productId: verified.productId, purchaseToken: verified.purchaseToken, country: verified.country || event.country, currency: event.currency, priceAmountMicros: event.priceAmountMicros, raw: verified.raw });
   sendNotification(event.studioId, {
     type: verified.status === 'active' ? 'subscription_renewed' : 'subscription_updated',
     title: verified.status === 'active' ? 'Subscription renewed' : 'Subscription updated',

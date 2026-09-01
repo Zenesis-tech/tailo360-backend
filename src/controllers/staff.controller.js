@@ -1,13 +1,13 @@
 const { z } = require("zod");
 const { Member, User, Session } = require("../models");
 const { AppError, notFound } = require("../utils/errors");
+const { normalizeRegionalPhone, studioCountry } = require("../utils/regional-phone");
 
 const phoneSchema = z
   .string()
   .trim()
-  .transform((value) => value.replace(/\s|-/g, ""))
-  .refine((value) => /^\+?[1-9]\d{9,14}$/.test(value), "Use a valid mobile number.")
-  .transform((value) => (value.startsWith("+") ? value : `+91${value}`));
+  .min(8)
+  .max(24);
 const staffRole = z.enum(["master_tailor", "front_desk"]);
 
 function serialize(member) {
@@ -99,6 +99,7 @@ async function create(req, res) {
     phone: phoneSchema,
     role: staffRole,
   }).parse(req.body);
+  input.phone = normalizeRegionalPhone(input.phone, studioCountry(req));
   await assertSeatAvailable(req);
   const user = await assertAvailableIdentity(input.phone);
   let member = await Member.findOne({
@@ -139,6 +140,9 @@ async function update(req, res) {
     role: staffRole.optional(),
     status: z.enum(["active", "limited", "paused"]).optional(),
   }).parse(req.body);
+  if (input.phone) {
+    input.phone = normalizeRegionalPhone(input.phone, studioCountry(req));
+  }
   const member = await Member.findOne({
     _id: req.params.id,
     studioId: req.auth.studio._id,

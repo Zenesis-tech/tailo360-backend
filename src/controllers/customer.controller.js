@@ -2,6 +2,7 @@ const { z } = require("zod");
 const { Customer, Order, Measurement, GarmentTemplate } = require("../models");
 const { AppError, notFound } = require("../utils/errors");
 const { escapedSearch } = require("../utils/search");
+const { normalizeRegionalPhone, studioCountry } = require("../utils/regional-phone");
 const workflowNotifications = require("../services/workflow-notifications.service");
 function serializeMeasurement(row) {
   return row?.toObject
@@ -10,7 +11,7 @@ function serializeMeasurement(row) {
 }
 const customerInput = z.object({
   name: z.string().trim().min(2).max(100),
-  phone: z.string().trim().min(10).max(20),
+  phone: z.string().trim().min(8).max(24),
   address: z.string().max(500).optional(),
   gender: z.enum(["male", "female", "other"]).optional(),
   notes: z.string().max(2000).optional(),
@@ -68,6 +69,7 @@ async function list(req, res) {
 }
 async function create(req, res) {
   const input = customerInput.parse(req.body);
+  input.phone = normalizeRegionalPhone(input.phone, studioCountry(req));
   const duplicate = await Customer.findOne({
     studioId: req.auth.studio._id,
     phone: input.phone,
@@ -130,6 +132,9 @@ async function update(req, res) {
     .partial()
     .extend({ version: z.number().int().nonnegative() })
     .parse(req.body);
+  if (body.phone) {
+    body.phone = normalizeRegionalPhone(body.phone, studioCountry(req));
+  }
   const customer = await Customer.findOne({
     _id: req.params.id,
     studioId: req.auth.studio._id,

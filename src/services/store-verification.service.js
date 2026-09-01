@@ -30,7 +30,19 @@ async function verifyGoogle(purchaseToken) {
   const raw = await response.json(); const line = raw.lineItems?.[0];
   if (!line?.productId || !line.expiryTime) throw new AppError(422, 'GOOGLE_PURCHASE_INVALID', 'Google Play returned an incomplete subscription.');
   const map = { SUBSCRIPTION_STATE_ACTIVE: 'active', SUBSCRIPTION_STATE_IN_GRACE_PERIOD: 'grace_period', SUBSCRIPTION_STATE_ON_HOLD: 'restricted', SUBSCRIPTION_STATE_PAUSED: 'restricted', SUBSCRIPTION_STATE_CANCELED: 'cancelled', SUBSCRIPTION_STATE_EXPIRED: 'expired' };
-  return { platform: 'google', transactionId: raw.latestOrderId || purchaseToken, originalTransactionId: raw.linkedPurchaseToken || purchaseToken, productId: line.productId, periodEndsAt: new Date(line.expiryTime), status: map[raw.subscriptionState] || 'restricted', raw };
+  return {
+    platform: 'google',
+    transactionId: raw.latestOrderId || purchaseToken,
+    originalTransactionId: raw.linkedPurchaseToken || purchaseToken,
+    purchaseToken,
+    productId: line.productId,
+    periodEndsAt: new Date(line.expiryTime),
+    status: map[raw.subscriptionState] || 'restricted',
+    country: raw.regionCode,
+    autoRenewing: !!line.autoRenewingPlan?.autoRenewEnabled,
+    cancellationReason: raw.canceledStateContext ? Object.keys(raw.canceledStateContext)[0] : undefined,
+    raw,
+  };
 }
 function appleToken() {
   if (!env.APPLE_ISSUER_ID || !env.APPLE_KEY_ID || !env.APPLE_PRIVATE_KEY || !env.APPLE_BUNDLE_ID) throw new AppError(503, 'APPLE_BILLING_NOT_CONFIGURED', 'App Store billing is not configured.');

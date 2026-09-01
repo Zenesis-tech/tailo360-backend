@@ -85,6 +85,66 @@ test('OTP provisions a studio and returns a usable token', async () => {
   expect(new Date(profile.body.data.subscription.trialEndsAt).getTime()).toBeGreaterThan(Date.now());
 });
 
+test('international OTP persists an E.164 identity and regional profile', async () => {
+  const verified = await createAccount('+61412345678', {
+    country: 'AU',
+    timezone: 'Australia/Sydney',
+    locale: 'en-AU',
+  });
+  expect(verified.body.data.user).toMatchObject({
+    phone: '+61412345678',
+    country: 'AU',
+    currency: 'AUD',
+    timezone: 'Australia/Sydney',
+    locale: 'en-AU',
+  });
+  const profile = await request(app)
+    .get('/api/v1/auth/me')
+    .set('Authorization', `Bearer ${verified.body.data.accessToken}`)
+    .expect(200);
+  expect(profile.body.data.studio.settings).toMatchObject({
+    country: 'AU',
+    currency: 'AUD',
+    dialCode: '+61',
+    timezone: 'Australia/Sydney',
+  });
+});
+
+test('customer and staff phones inherit the owner studio region', async () => {
+  const owner = await createAccount('+61412345679', {
+    country: 'AU',
+    timezone: 'Australia/Sydney',
+    locale: 'en-AU',
+  });
+  const authorization = `Bearer ${owner.body.data.accessToken}`;
+  const { Subscription } = require('../src/models');
+  await Subscription.updateOne(
+    { studioId: owner.body.data.studioId },
+    { seatLimit: 3 },
+  );
+
+  const staff = await request(app)
+    .post('/api/v1/studio/members')
+    .set('Authorization', authorization)
+    .send({ name: 'Sydney Tailor', phone: '412345680', role: 'master_tailor' })
+    .expect(201);
+  expect(staff.body.data.phone).toBe('+61412345680');
+
+  const customer = await request(app)
+    .post('/api/v1/customers')
+    .set('Authorization', authorization)
+    .send({ name: 'Sydney Customer', phone: '412345681' })
+    .expect(201);
+  expect(customer.body.data.phone).toBe('+61412345681');
+
+  const mismatch = await request(app)
+    .post('/api/v1/studio/members')
+    .set('Authorization', authorization)
+    .send({ name: 'Wrong Region', phone: '+919876543210', role: 'front_desk' })
+    .expect(422);
+  expect(mismatch.body.error.code).toBe('PHONE_COUNTRY_MISMATCH');
+});
+
 test('owners manage staff and staff OTP login resolves the assigned studio', async () => {
   const owner = await createAccount('+919876543240');
   const ownerToken = owner.body.data.accessToken;

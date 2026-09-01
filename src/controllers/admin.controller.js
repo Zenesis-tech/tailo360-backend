@@ -164,6 +164,9 @@ async function dashboard(req, res) {
     expiringTrials,
     failedNotifications,
     monthly,
+    usersByCountry,
+    subscriptionsByCountry,
+    subscriptionRevenue,
   ] = await Promise.all([
     Studio.countDocuments(),
     User.countDocuments({ deletedAt: null }),
@@ -193,6 +196,20 @@ async function dashboard(req, res) {
       },
       { $group: { _id: null, value: { $sum: "$payments.amountPaise" } } },
     ]),
+    User.aggregate([
+      { $match: { deletedAt: null } },
+      { $group: { _id: "$country", count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+    ]),
+    Subscription.aggregate([
+      { $group: { _id: { country: "$country", currency: "$currency", status: "$status" }, count: { $sum: 1 } } },
+      { $sort: { "_id.country": 1, "_id.status": 1 } },
+    ]),
+    SubscriptionEvent.aggregate([
+      { $match: { verifiedAt: { $gte: month }, priceAmountMicros: { $gt: 0 }, $or: [{ "raw.subscriptionState": "SUBSCRIPTION_STATE_ACTIVE" }, { "raw.subscriptionState": { $exists: false } }] } },
+      { $group: { _id: { country: "$country", currency: "$currency" }, amountMicros: { $sum: "$priceAmountMicros" }, transactions: { $sum: 1 } } },
+      { $sort: { "_id.country": 1 } },
+    ]),
   ]);
   const subscriptionCounts = Object.fromEntries(
     subscriptions.map((item) => [item._id, item.count]),
@@ -209,6 +226,9 @@ async function dashboard(req, res) {
       failedNotifications,
       monthlyCollectionsPaise: monthly[0]?.value || 0,
       subscriptions: subscriptionCounts,
+      usersByCountry,
+      subscriptionsByCountry,
+      subscriptionRevenue,
     },
   });
 }
@@ -216,6 +236,7 @@ async function users(req, res) {
   const q = queryText(req.query.q);
   const filter = {
     deletedAt: null,
+    ...(req.query.country ? { country: req.query.country } : {}),
     ...(q ? { $or: [{ name: q }, { phone: q }, { email: q }] } : {}),
   };
   const result = await list(User, filter, { createdAt: -1 }, req);
@@ -281,9 +302,13 @@ async function resetUserPassword(req, res) {
 }
 async function studios(req, res) {
   const q = queryText(req.query.q);
+  const filter = {
+    ...(q ? { name: q } : {}),
+    ...(req.query.country ? { "settings.country": req.query.country } : {}),
+  };
   const result = await list(
     Studio,
-    q ? { name: q } : {},
+    filter,
     { createdAt: -1 },
     req,
   );
@@ -340,9 +365,12 @@ async function subscriptions(req, res) {
   const filter = {};
   if (req.query.status) filter.status = req.query.status;
   if (req.query.plan) filter.plan = req.query.plan;
+  if (req.query.country) filter.country = req.query.country;
+  if (req.query.currency) filter.currency = req.query.currency;
+  if (req.query.q) filter.purchaseToken = req.query.q.trim();
   const result = await list(Subscription, filter, { updatedAt: -1 }, req, {
     path: "studioId",
-    select: "name address businessType services referralCode ownerUserId onboardingCompletedAt createdAt",
+    select: "name address businessType services referralCode ownerUserId onboardingCompletedAt settings.country settings.currency createdAt",
     populate: { path: "ownerUserId", select: "name phone email" },
   });
   res.json(result);
@@ -1049,6 +1077,11 @@ const configInput = z.object({
   minimumAndroidVersion: z.string().max(50).optional(),
   minimumIosVersion: z.string().max(50).optional(),
   featureFlags: z.record(z.boolean()).default({}),
+  supportedCountries: z.array(z.object({
+    code: z.enum(['IN', 'US', 'CA', 'GB', 'AU']),
+    active: z.boolean(),
+    subscriptionsVisible: z.boolean(),
+  })).length(5).optional(),
   support: z.object({
     whatsappNumber: z.string().trim().transform((value) => value.replace(/\s|-/g, '')).refine((value) => value === '' || /^\+?[1-9]\d{9,14}$/.test(value), 'Use a valid WhatsApp number.').transform((value) => value === '' || value.startsWith('+') ? value : `+91${value}`),
     deliveryMode: z.enum(['ticket', 'whatsapp', 'both']).default('ticket'),
@@ -1063,7 +1096,7 @@ async function config(req, res) {
   res.json({
     data: row
       ? { ...row.toObject(), support: { whatsappNumber: '', deliveryMode: 'ticket', ...(row.support?.toObject?.() || row.support || {}) } }
-      : { key: "platform", maintenance: false, featureFlags: {}, support: { whatsappNumber: '', deliveryMode: 'ticket' } },
+      : { key: "platform", maintenance: false, featureFlags: {}, supportedCountries: ['IN', 'US', 'CA', 'GB', 'AU'].map((code) => ({ code, active: true, subscriptionsVisible: true })), support: { whatsappNumber: '', deliveryMode: 'ticket' } },
   });
 }
 async function updateConfig(req, res) {

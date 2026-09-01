@@ -25,9 +25,21 @@ function tokenPair(user, member) {
   const payload = { sub: user.id, studioId: member.studioId.toString(), memberId: member.id, role: member.role };
   return { accessToken: jwt.sign(payload, env.JWT_ACCESS_SECRET, { expiresIn: env.JWT_ACCESS_TTL }), refreshToken: jwt.sign({ ...payload, tokenId }, env.JWT_REFRESH_SECRET, { expiresIn: env.JWT_REFRESH_TTL }), tokenId };
 }
-async function createStudioFor(user, { studioName, referralCode, garmentAudiences = ['men', 'women'] }) {
+async function createStudioFor(user, { studioName, referralCode, garmentAudiences = ['men', 'women'], country, currency, dialCode, timezone, locale }) {
   const audiences = [...new Set(garmentAudiences)];
-  const studio = await Studio.create({ name: studioName || 'My Studio', ownerUserId: user._id, referralCode: `TL${referralId()}`, settings: { garmentAudiences: audiences } });
+  const studio = await Studio.create({
+    name: studioName || 'My Studio',
+    ownerUserId: user._id,
+    referralCode: `TL${referralId()}`,
+    settings: {
+      garmentAudiences: audiences,
+      country: country || user.country,
+      currency: currency || user.currency,
+      dialCode: dialCode || user.dialCode,
+      timezone: timezone || user.timezone,
+      locale: locale || user.locale,
+    },
+  });
   const owner = await Member.create({ studioId: studio._id, userId: user._id, phone: user.phone || `google:${user.googleSubject}`, role: 'owner' });
   const starter = await SubscriptionPlan.findOneAndUpdate(
     { code: 'starter' },

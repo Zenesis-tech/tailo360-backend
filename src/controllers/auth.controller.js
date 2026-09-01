@@ -3,7 +3,7 @@ const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
 const { z } = require('zod');
 const env = require('../config/env');
-const { Otp, User, Member, Session, Studio } = require('../models');
+const { Otp, User, Member, Session, Studio, AppConfig } = require('../models');
 const { AppError } = require('../utils/errors');
 const { hash, createStudioFor, issueSession } = require('../services/auth.service');
 const otpProvider = require('../services/otp-provider.service');
@@ -15,6 +15,23 @@ const useOtpProvider = () => env.NODE_ENV === 'production' || env.OTP_DELIVERY_M
 const isDemoLogin = (phone) =>
   env.DEMO_ACCOUNT_ENABLED && isDemoPhone(phone);
 const phoneSchema = z.string().trim().transform((value) => value.replace(/\s|-/g, '')).refine((value) => /^\+?[1-9]\d{9,14}$/.test(value), 'Use a valid mobile number.').transform((value) => value.startsWith('+') ? value : `+91${value}`);
+const regions = {
+  IN: { currency: 'INR', dialCode: '+91', timezone: 'Asia/Kolkata', locale: 'en-IN' },
+  US: { currency: 'USD', dialCode: '+1', timezone: 'America/New_York', locale: 'en-US' },
+  CA: { currency: 'CAD', dialCode: '+1', timezone: 'America/Toronto', locale: 'en-CA' },
+  GB: { currency: 'GBP', dialCode: '+44', timezone: 'Europe/London', locale: 'en-GB' },
+  AU: { currency: 'AUD', dialCode: '+61', timezone: 'Australia/Sydney', locale: 'en-AU' },
+};
+const regionalInput = z.object({
+  country: z.enum(Object.keys(regions)).optional(),
+  timezone: z.string().trim().min(3).max(80).optional(),
+  locale: z.string().trim().min(2).max(20).optional(),
+});
+function regionalProfile(input = {}) {
+  const country = input.country || 'IN';
+  const defaults = regions[country];
+  return { country, currency: defaults.currency, dialCode: defaults.dialCode, timezone: input.timezone || defaults.timezone, locale: input.locale || defaults.locale };
+}
 async function restoreAccountIfEligible(user) {
   if (user.deletedAt) {
     throw new AppError(403, 'ACCOUNT_DELETED', 'This account has been permanently deleted.');
@@ -25,15 +42,31 @@ async function restoreAccountIfEligible(user) {
   return false;
 }
 function authConfig(req, res) { res.json({ data: { phoneAuthMode: env.PHONE_AUTH_MODE } }); }
-async function requestOtp(req, res) { if (env.PHONE_AUTH_MODE !== 'server') throw new AppError(409, 'PHONE_AUTH_PROVIDER_DISABLED', 'Server SMS verification is currently disabled.'); const phone = phoneSchema.parse(req.body.phone); if (isDemoLogin(phone)) return res.status(202).json({ data: { phone, expiresInSeconds: env.OTP_TTL_MINUTES * 60, demo: true } }); if (useOtpProvider()) { await otpProvider.sendOtp(phone); return res.status(202).json({ data: { phone, expiresInSeconds: env.OTP_TTL_MINUTES * 60 } }); } const code = '123456'; await Otp.deleteMany({ phone }); await Otp.create({ phone, codeHash: hash(code), expiresAt: new Date(Date.now() + env.OTP_TTL_MINUTES * 60000) }); res.status(202).json({ data: { phone, expiresInSeconds: env.OTP_TTL_MINUTES * 60, ...(env.EXPOSE_DEV_OTP ? { developmentCode: code } : {}) } }); }
+async function supportedRegions(req, res) {
+  const config = await AppConfig.findOne({ key: 'platform' }).select('supportedCountries');
+  const controls = new Map((config?.supportedCountries || []).map((item) => [item.code, item]));
+  res.json({ data: Object.entries(regions).map(([code, value]) => ({ code, ...value, active: controls.get(code)?.active ?? true, subscriptionsVisible: controls.get(code)?.subscriptionsVisible ?? true })) });
+}
+async function ensureRegionActive(country) {
+  if (!country) return;
+  const config = await AppConfig.findOne({ key: 'platform', supportedCountries: { $elemMatch: { code: country, active: false } } }).select('_id');
+  if (config) throw new AppError(403, 'COUNTRY_UNAVAILABLE', 'Tailo360 registration is not currently available in this country.');
+}
+function ensurePhoneMatchesRegion(phone, country) {
+  if (country && !phone.startsWith(regions[country].dialCode)) throw new AppError(422, 'PHONE_COUNTRY_MISMATCH', 'The phone number does not match the selected country.');
+}
+async function requestOtp(req, res) { if (env.PHONE_AUTH_MODE !== 'server') throw new AppError(409, 'PHONE_AUTH_PROVIDER_DISABLED', 'Server SMS verification is currently disabled.'); const phone = phoneSchema.parse(req.body.phone); const region = regionalInput.parse(req.body); await ensureRegionActive(region.country); ensurePhoneMatchesRegion(phone, region.country); if (isDemoLogin(phone)) return res.status(202).json({ data: { phone, expiresInSeconds: env.OTP_TTL_MINUTES * 60, demo: true } }); if (useOtpProvider()) { await otpProvider.sendOtp(phone); return res.status(202).json({ data: { phone, expiresInSeconds: env.OTP_TTL_MINUTES * 60 } }); } const code = '123456'; await Otp.deleteMany({ phone }); await Otp.create({ phone, codeHash: hash(code), expiresAt: new Date(Date.now() + env.OTP_TTL_MINUTES * 60000) }); res.status(202).json({ data: { phone, expiresInSeconds: env.OTP_TTL_MINUTES * 60, ...(env.EXPOSE_DEV_OTP ? { developmentCode: code } : {}) } }); }
 async function verifyOtp(req, res) {
   if (env.PHONE_AUTH_MODE !== 'server') throw new AppError(409, 'PHONE_AUTH_PROVIDER_DISABLED', 'Server SMS verification is currently disabled.');
-  const body = z.object({ phone: phoneSchema, code: z.string().regex(/^\d{6}$/), studioName: z.string().trim().min(2).max(80).optional(), referralCode: z.string().trim().toUpperCase().max(10).optional(), garmentAudiences: z.array(z.enum(['men', 'women', 'kids', 'unisex'])).min(1).max(4).optional() }).parse(req.body);
+  const body = z.object({ phone: phoneSchema, code: z.string().regex(/^\d{6}$/), studioName: z.string().trim().min(2).max(80).optional(), referralCode: z.string().trim().toUpperCase().max(10).optional(), garmentAudiences: z.array(z.enum(['men', 'women', 'kids', 'unisex'])).min(1).max(4).optional() }).and(regionalInput).parse(req.body);
+  await ensureRegionActive(body.country);
+  ensurePhoneMatchesRegion(body.phone, body.country);
   if (isDemoLogin(body.phone)) { if (body.code !== '111111') throw new AppError(401, 'OTP_INVALID', 'The code is invalid or expired.'); } else if (useOtpProvider()) { if (!await otpProvider.verifyOtp(body.phone, body.code)) throw new AppError(401, 'OTP_INVALID', 'The code is invalid or expired.'); } else { const otp = await Otp.findOne({ phone: body.phone }).sort({ createdAt: -1 }); if (!otp || otp.expiresAt < new Date() || otp.codeHash !== hash(body.code)) throw new AppError(401, 'OTP_INVALID', 'The code is invalid or expired.'); await Otp.deleteMany({ phone: body.phone }); }
   return finishPhoneAuthentication(body.phone, body, res);
 }
 async function finishPhoneAuthentication(phone, input, res, identity = {}) {
   let user = await User.findOne({ phone }); let isNew = false; let member; let studio;
+  const profile = regionalProfile(input);
   let accountRestored = false;
   if (user) {
     accountRestored = await restoreAccountIfEligible(user);
@@ -57,13 +90,13 @@ async function finishPhoneAuthentication(phone, input, res, identity = {}) {
       if (existingMembership.userId) {
         throw new AppError(409, 'STAFF_LOGIN_IDENTITY_MISMATCH', 'This staff login is linked to another mobile identity.');
       }
-      user = await User.create({ phone, name: existingMembership.name || undefined });
+      user = await User.create({ phone, name: existingMembership.name || undefined, ...profile });
       existingMembership.userId = user._id;
       await existingMembership.save();
       member = existingMembership;
       studio = await Studio.findById(member.studioId);
     } else {
-      user = await User.create({ phone });
+      user = await User.create({ phone, ...profile });
       ({ studio, owner: member } = await createStudioFor(user, input));
       isNew = true;
     }
@@ -77,13 +110,18 @@ async function finishPhoneAuthentication(phone, input, res, identity = {}) {
     user.firebaseUid = identity.firebaseUid;
     await user.save();
   }
+  if (user.country !== profile.country || !user.timezone) {
+    Object.assign(user, profile);
+    await user.save();
+  }
   const needsOnboarding = !isDemoLogin(phone) && member.role === 'owner'
     && (isNew || (!studio.onboardingCompletedAt && studio.name === 'My Studio'));
-  const tokens = await issueSession(user, member); res.json({ data: { ...tokens, isNew, accountRestored, needsOnboarding, user: { id: user.id, phone: user.phone, name: user.name, language: user.language }, studioId: member.studioId, role: member.role } });
+  const tokens = await issueSession(user, member); res.json({ data: { ...tokens, isNew, accountRestored, needsOnboarding, user: { id: user.id, phone: user.phone, name: user.name, language: user.language, country: user.country, currency: user.currency, timezone: user.timezone, locale: user.locale }, studioId: member.studioId, role: member.role } });
 }
 async function firebasePhone(req, res) {
   if (env.PHONE_AUTH_MODE !== 'firebase') throw new AppError(409, 'PHONE_AUTH_PROVIDER_DISABLED', 'Firebase phone verification is currently disabled.');
-  const input = z.object({ idToken: z.string().min(100).max(10000) }).parse(req.body);
+  const input = z.object({ idToken: z.string().min(100).max(10000) }).and(regionalInput).parse(req.body);
+  await ensureRegionActive(input.country);
   let decoded;
   try {
     // Signature, issuer, audience and expiry validation are sufficient here.
@@ -99,7 +137,8 @@ async function firebasePhone(req, res) {
     throw new AppError(401, 'FIREBASE_PHONE_REQUIRED', 'A verified Firebase phone number is required.');
   }
   const phone = phoneSchema.parse(decoded.phone_number);
-  return finishPhoneAuthentication(phone, {}, res, { firebaseUid: decoded.uid });
+  ensurePhoneMatchesRegion(phone, input.country);
+  return finishPhoneAuthentication(phone, input, res, { firebaseUid: decoded.uid });
 }
 async function google(req, res) {
   if (!env.GOOGLE_CLIENT_IDS.length) throw new AppError(503, 'GOOGLE_AUTH_NOT_CONFIGURED', 'Google sign-in is not configured.');
@@ -141,12 +180,19 @@ async function refresh(req, res) {
   res.json({ data: tokens });
 }
 async function logout(req, res) { const token = req.body.refreshToken; if (token) { try { const payload = jwt.verify(token, env.JWT_REFRESH_SECRET); await Session.updateOne({ tokenId: payload.tokenId }, { revokedAt: new Date() }); } catch (_) {} } res.status(204).send(); }
-function me(req, res) { const { user, member, studio, subscription } = req.auth; const { permissionsFor } = require('../middleware/auth'); res.json({ data: { user: { id: user.id, phone: user.phone, email: user.email, name: user.name, platformRole: user.platformRole, language: user.language }, membership: { id: member.id, role: member.role, status: member.status, permissions: permissionsFor(member) }, studio, subscription } }); }
+function me(req, res) { const { user, member, studio, subscription } = req.auth; const { permissionsFor } = require('../middleware/auth'); res.json({ data: { user: { id: user.id, phone: user.phone, email: user.email, name: user.name, platformRole: user.platformRole, language: user.language, country: user.country, currency: user.currency, dialCode: user.dialCode, timezone: user.timezone, locale: user.locale }, membership: { id: member.id, role: member.role, status: member.status, permissions: permissionsFor(member) }, studio, subscription } }); }
 async function updatePreferences(req, res) {
-  const input = z.object({ language: z.enum(['en', 'hi', 'gu', 'mr']) }).parse(req.body);
-  req.auth.user.language = input.language;
+  const input = z.object({ language: z.enum(['en', 'hi', 'gu', 'mr']).optional() }).and(regionalInput).parse(req.body);
+  if (!input.language && !input.country) throw new AppError(422, 'VALIDATION_ERROR', 'A language or country preference is required.');
+  if (input.language) req.auth.user.language = input.language;
+  if (input.country) {
+    const profile = regionalProfile(input);
+    Object.assign(req.auth.user, profile);
+    Object.assign(req.auth.studio.settings, profile);
+    await req.auth.studio.save();
+  }
   await req.auth.user.save();
-  res.json({ data: { language: req.auth.user.language } });
+  res.json({ data: { language: req.auth.user.language, country: req.auth.user.country, currency: req.auth.user.currency, timezone: req.auth.user.timezone, locale: req.auth.user.locale } });
 }
 async function scheduleAccountDeletion(req, res) {
   const now = new Date();
@@ -162,4 +208,4 @@ async function scheduleAccountDeletion(req, res) {
   await purgeAccount(req.auth.user._id, now);
   res.json({ data: { deletedAt: now.toISOString() } });
 }
-module.exports = { authConfig, requestOtp, verifyOtp, firebasePhone, google, adminLogin, refresh, logout, me, updatePreferences, scheduleAccountDeletion };
+module.exports = { authConfig, supportedRegions, requestOtp, verifyOtp, firebasePhone, google, adminLogin, refresh, logout, me, updatePreferences, scheduleAccountDeletion };

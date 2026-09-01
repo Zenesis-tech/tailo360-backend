@@ -37,6 +37,7 @@ const requirePlatformAdmin = authMiddleware.requirePlatformAdmin;
 const { idempotent } = require("../middleware/idempotency");
 const router = express.Router();
 router.get("/auth/config", auth.authConfig);
+router.get("/regions", auth.supportedRegions);
 router.post("/auth/otp/request", auth.requestOtp);
 router.post("/auth/otp/verify", auth.verifyOtp);
 router.post("/auth/firebase/phone", auth.firebasePhone);
@@ -279,6 +280,11 @@ router.get("/subscription/plans", authenticate, subscriptions.plans);
 router.get("/subscription/products", authenticate, subscriptions.products);
 router.post(
   "/subscription/validate-purchase",
+  authenticate,
+  asyncRoute(idempotent(subscriptionController.validatePurchase)),
+);
+router.post(
+  "/subscription/restore",
   authenticate,
   asyncRoute(idempotent(subscriptionController.validatePurchase)),
 );

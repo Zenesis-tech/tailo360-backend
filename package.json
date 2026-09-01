@@ -11,6 +11,7 @@
     "seed:referrals": "node src/scripts/seed-referral-reward-config.js",
     "seed:demo": "node src/scripts/seed-demo-account.js",
     "migrate:global-garments": "node src/scripts/migrate-global-garments.js",
+    "migrate:global-regions": "node src/scripts/migrate-global-regions.js",
     "create:admin": "node src/scripts/create-platform-admin.js",
     "backup:now": "node src/scripts/backup-now.js",
     "backup:restore": "node src/scripts/restore-backup.js",
