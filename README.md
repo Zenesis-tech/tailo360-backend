@@ -59,6 +59,10 @@ Always perform a restore drill in an isolated environment before relying on prod
 
 During studio onboarding, `POST /auth/otp/verify` and `POST /auth/google` accept `garmentAudiences`, a non-empty array containing `men`, `women`, `kids`, and/or `unisex`. The selection is stored at `studio.settings.garmentAudiences`, and only matching starter templates are provisioned. `GET /garment-templates` automatically respects the studio selection and optionally accepts `?audience=women`. Changing `settings.garmentAudiences` through `PATCH /studio` adds missing starter garments for newly selected audiences and hides deselected catalogues without deleting templates referenced by historical orders.
 
+Global garment templates are also country-targeted. In the admin panel, open **Operations → Garment templates** to add, edit, deactivate, or delete templates and select their available countries. Measurement fields, translations, icons, diagrams, and customization options belong to that regional template. Templates may reuse the same name when their country selections do not overlap, allowing measurements to differ by region. Studio-created custom templates remain private to their studio.
+
+After deploying regional garment catalogues to an existing database, run `npm.cmd run migrate:garment-regions` once from `server/`. It marks legacy global templates as available in all supported countries and replaces the legacy name index with region-aware uniqueness indexes. Run this migration before creating same-name regional variants in production.
+
 R2 objects are private. The app first asks the API for a signed PUT URL, uploads directly with the returned `Content-Type`, calls `complete`, and uses a signed GET URL only when it needs to display/play media. This keeps user media and all R2 credentials out of the mobile bundle. Cloudflare documents this short-lived presigned-URL pattern for direct client uploads and downloads. [Cloudflare R2 presigned URLs](https://developers.cloudflare.com/r2/api/s3/presigned-urls/)
 
 ## Store subscriptions

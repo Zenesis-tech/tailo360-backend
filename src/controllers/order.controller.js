@@ -6,6 +6,10 @@ const { escapedSearch } = require("../utils/search");
 const { maxFabricPhotosPerGarment } = require("../config/order-limits");
 const workflowNotifications = require("../services/workflow-notifications.service");
 const { scheduleOrderReminders } = require("../services/reminder-jobs.service");
+const {
+  studioCountry,
+  visibleTemplateFilter,
+} = require("../services/garment-region.service");
 const measurementValue = z
   .string()
   .trim()
@@ -26,7 +30,8 @@ const lineInput = z.object({
   sampleMedia: z.string().optional(),
 });
 
-async function pricedOrderLines(studioId, inputLines, existingPrices = new Map()) {
+async function pricedOrderLines(studio, user, inputLines, existingPrices = new Map()) {
+  const studioId = studio._id;
   const templateIds = [...new Set(inputLines.map((line) => line.templateId))];
   if (templateIds.length !== inputLines.length)
     throw new AppError(
@@ -37,8 +42,10 @@ async function pricedOrderLines(studioId, inputLines, existingPrices = new Map()
   const templates = await GarmentTemplate.find({
     _id: { $in: templateIds },
     $or: [
-      { scope: "global" },
-      { studioId, scope: { $ne: "global" } },
+      ...visibleTemplateFilter(studioId, studioCountry(studio, user)).$or,
+      ...(existingPrices.size
+        ? [{ _id: { $in: [...existingPrices.keys()] } }]
+        : []),
     ],
   });
   const unavailable = templateIds.filter((id) => {
@@ -168,7 +175,7 @@ async function create(req, res) {
       "INVALID_DELIVERY_DATE",
       "Delivery date cannot be before the order date.",
     );
-  const lines = await pricedOrderLines(studio._id, body.lines);
+  const lines = await pricedOrderLines(studio, req.auth.user, body.lines);
   const totalPaise = lines.reduce((sum, x) => sum + x.lineTotalPaise, 0);
   const sequence = (
     await require("../models").Studio.findOneAndUpdate(
@@ -296,7 +303,8 @@ async function update(req, res) {
       order.lines.map((line) => [line.templateId.toString(), line.unitPricePaise]),
     );
     const lines = await pricedOrderLines(
-      req.auth.studio._id,
+      req.auth.studio,
+      req.auth.user,
       inputLines,
       existingPrices,
     );

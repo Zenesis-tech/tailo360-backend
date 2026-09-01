@@ -1,5 +1,9 @@
 const { z } = require("zod");
 const { Customer, Order, Measurement, GarmentTemplate } = require("../models");
+const {
+  studioCountry: garmentStudioCountry,
+  visibleTemplateFilter,
+} = require("../services/garment-region.service");
 const { AppError, notFound } = require("../utils/errors");
 const { escapedSearch } = require("../utils/search");
 const { normalizeRegionalPhone, studioCountry } = require("../utils/regional-phone");
@@ -296,10 +300,10 @@ async function saveMeasurements(req, res) {
     }).select("name"),
     GarmentTemplate.findOne({
       _id: req.params.templateId,
-      $or: [
-        { scope: "global" },
-        { studioId: req.auth.studio._id, scope: { $ne: "global" } },
-      ],
+      ...visibleTemplateFilter(
+        req.auth.studio._id,
+        garmentStudioCountry(req.auth.studio, req.auth.user),
+      ),
     }),
   ]);
   if (!customer) throw notFound("Customer");

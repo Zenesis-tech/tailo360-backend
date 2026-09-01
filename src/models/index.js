@@ -217,6 +217,12 @@ const templateSchema = new Schema(
       default: "unisex",
       index: true,
     },
+    // Global templates are available only in these studio countries. Studio
+    // templates remain private to their studio and ignore this field.
+    countries: {
+      type: [{ type: String, enum: ["IN", "US", "CA", "GB", "AU"] }],
+      default: undefined,
+    },
     active: { type: Boolean, default: true },
     deletedAt: { type: Date, default: null },
     garmentIconUrl: {
@@ -282,7 +288,14 @@ const templateSchema = new Schema(
   },
   base,
 );
-templateSchema.index({ scope: 1, studioId: 1, name: 1 }, { unique: true });
+templateSchema.index(
+  { studioId: 1, name: 1 },
+  { unique: true, partialFilterExpression: { scope: "studio" } },
+);
+templateSchema.index(
+  { name: 1, countries: 1 },
+  { unique: true, partialFilterExpression: { scope: "global" } },
+);
 const priceSchema = new Schema(
   {
     studioId: { type: Schema.Types.ObjectId, required: true, index: true },

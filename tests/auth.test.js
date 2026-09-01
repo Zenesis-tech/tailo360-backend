@@ -1227,6 +1227,110 @@ test('standard garments are global while studio-created garments stay private', 
   expect(secondAfter.body.data.find((row) => row.name === 'Shirt').scope).toBe('global');
 });
 
+test('platform garment templates and measurements are managed by studio country', async () => {
+  const indian = await createAccount('+919876543270', {
+    garmentAudiences: ['men'],
+  });
+  const australian = await createAccount('+61412345270', {
+    country: 'AU',
+    timezone: 'Australia/Sydney',
+    locale: 'en-AU',
+    garmentAudiences: ['men'],
+  });
+  const { User } = require('../src/models');
+  await User.updateOne(
+    { _id: indian.body.data.user.id },
+    { platformRole: 'admin' },
+  );
+  const authorization = `Bearer ${indian.body.data.accessToken}`;
+  const name = 'Regional ceremonial jacket';
+
+  const indiaTemplate = await request(app)
+    .post('/api/v1/admin/garment-templates')
+    .set('Authorization', authorization)
+    .send({
+      template: {
+        name,
+        audience: 'men',
+        countries: ['IN'],
+        fields: [{ name: 'Indian chest', unit: 'in', required: true }],
+      },
+    })
+    .expect(201);
+  const australiaTemplate = await request(app)
+    .post('/api/v1/admin/garment-templates')
+    .set('Authorization', authorization)
+    .send({
+      template: {
+        name,
+        audience: 'men',
+        countries: ['AU'],
+        fields: [{ name: 'Australian torso', unit: 'cm', required: true }],
+      },
+    })
+    .expect(201);
+  const overlapping = await request(app)
+    .post('/api/v1/admin/garment-templates')
+    .set('Authorization', authorization)
+    .send({
+      template: {
+        name,
+        audience: 'men',
+        countries: ['IN'],
+        fields: [{ name: 'Duplicate chest', unit: 'in' }],
+      },
+    })
+    .expect(409);
+  expect(overlapping.body.error.code).toBe(
+    'GARMENT_TEMPLATE_REGION_CONFLICT',
+  );
+
+  const indiaList = await request(app)
+    .get('/api/v1/garment-templates?active=true')
+    .set('Authorization', authorization)
+    .expect(200);
+  const australiaList = await request(app)
+    .get('/api/v1/garment-templates?active=true')
+    .set('Authorization', `Bearer ${australian.body.data.accessToken}`)
+    .expect(200);
+  expect(indiaList.body.data.find((row) => row.name === name)).toMatchObject({
+    _id: indiaTemplate.body.data._id,
+    countries: ['IN'],
+    fields: [expect.objectContaining({ name: 'Indian chest', unit: 'in' })],
+  });
+  expect(australiaList.body.data.find((row) => row.name === name)).toMatchObject({
+    _id: australiaTemplate.body.data._id,
+    countries: ['AU'],
+    fields: [expect.objectContaining({ name: 'Australian torso', unit: 'cm' })],
+  });
+
+  const moved = await request(app)
+    .patch(`/api/v1/admin/garment-templates/${australiaTemplate.body.data._id}`)
+    .set('Authorization', authorization)
+    .send({
+      version: australiaTemplate.body.data.version,
+      countries: ['US'],
+      fields: [{ name: 'US torso', unit: 'in', required: true }],
+    })
+    .expect(200);
+  const australiaAfter = await request(app)
+    .get('/api/v1/garment-templates?active=true')
+    .set('Authorization', `Bearer ${australian.body.data.accessToken}`)
+    .expect(200);
+  expect(australiaAfter.body.data.some((row) => row.name === name)).toBe(false);
+
+  await request(app)
+    .delete(`/api/v1/admin/garment-templates/${indiaTemplate.body.data._id}`)
+    .set('Authorization', authorization)
+    .send({ version: indiaTemplate.body.data.version })
+    .expect(200);
+  await request(app)
+    .delete(`/api/v1/admin/garment-templates/${moved.body.data._id}`)
+    .set('Authorization', authorization)
+    .send({ version: moved.body.data.version })
+    .expect(200);
+});
+
 test('garment templates persist a backend-managed measurement diagram', async () => {
   const verified = await createAccount('+919876543213');
   const diagram = 'https://cdn.example.com/measurement-guides/shirt.png';

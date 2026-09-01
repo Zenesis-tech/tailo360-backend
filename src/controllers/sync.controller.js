@@ -1,5 +1,9 @@
 const { z } = require("zod");
 const { Customer, Order, GarmentTemplate } = require("../models");
+const {
+  studioCountry,
+  visibleTemplateFilter,
+} = require("../services/garment-region.service");
 async function changes(req, res) {
   const body = z
     .object({
@@ -16,10 +20,10 @@ async function changes(req, res) {
       .limit(body.limit),
     GarmentTemplate.find({
       updatedAt: { $gt: after },
-      $or: [
-        { scope: "global" },
-        { studioId: req.auth.studio._id, scope: { $ne: "global" } },
-      ],
+      ...visibleTemplateFilter(
+        req.auth.studio._id,
+        studioCountry(req.auth.studio, req.auth.user),
+      ),
     })
       .sort({ updatedAt: 1 })
       .limit(body.limit),

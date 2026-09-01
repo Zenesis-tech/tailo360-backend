@@ -3,6 +3,10 @@ const { nanoid } = require("nanoid");
 const { GarmentTemplate, Price, Media } = require("../models");
 const { notFound } = require("../utils/errors");
 const r2 = require("../services/r2.service");
+const {
+  studioCountry,
+  visibleTemplateFilter,
+} = require("../services/garment-region.service");
 const diagramUrl = z
   .string()
   .trim()
@@ -83,9 +87,12 @@ const normalize = (value) => ({
     })),
   })),
 });
-const visibleToStudio = (studioId) => ({
+const visibleToStudio = (req) => ({
   deletedAt: null,
-  $or: [{ scope: "global" }, { studioId, scope: { $ne: "global" } }],
+  ...visibleTemplateFilter(
+    req.auth.studio._id,
+    studioCountry(req.auth.studio, req.auth.user),
+  ),
 });
 const fieldMatchKeys = (field) => [field.iconKey, field.name]
   .map((value) => String(value || "").toLowerCase().normalize("NFKD")
@@ -166,7 +173,7 @@ async function list(req, res) {
         ],
       };
   const rows = await GarmentTemplate.find({
-    $and: [visibleToStudio(req.auth.studio._id), audienceFilter],
+    $and: [visibleToStudio(req), audienceFilter],
     ...(req.query.active === "true" ? { active: true } : {}),
   }).sort({ scope: 1, audience: 1, name: 1 });
   const globalFieldIcons = new Map();
@@ -240,7 +247,7 @@ async function update(req, res) {
 async function clone(req, res) {
   const source = await GarmentTemplate.findOne({
     _id: req.body.templateId,
-    ...visibleToStudio(req.auth.studio._id),
+    ...visibleToStudio(req),
   });
   if (!source) throw notFound("Garment template");
   const row = await GarmentTemplate.create({
@@ -301,7 +308,7 @@ async function setPrice(req, res) {
     .parse(req.body);
   const template = await GarmentTemplate.findOne({
     _id: req.params.templateId,
-    ...visibleToStudio(req.auth.studio._id),
+    ...visibleToStudio(req),
   });
   if (!template) throw notFound("Garment template");
   await Price.updateMany(

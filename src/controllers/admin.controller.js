@@ -46,6 +46,7 @@ const { send: sendNotification } = require("../services/notification.service");
 const { escapedSearch } = require("../utils/search");
 const r2 = require("../services/r2.service");
 const env = require("../config/env");
+const { SUPPORTED_GARMENT_COUNTRIES } = require("../services/garment-region.service");
 const diagramUrl = z
   .string()
   .trim()
@@ -71,6 +72,11 @@ const localizedNames = z
 const templateInput = z.object({
   name: z.string().trim().min(2).max(80),
   audience: z.enum(["men", "women", "kids", "unisex"]).default("unisex"),
+  countries: z
+    .array(z.enum(SUPPORTED_GARMENT_COUNTRIES))
+    .min(1, "Select at least one country.")
+    .transform((countries) => [...new Set(countries)])
+    .default(SUPPORTED_GARMENT_COUNTRIES),
   active: z.boolean().optional(),
   garmentIconUrl: iconUrl,
   measurementDiagramUrl: diagramUrl,
@@ -126,6 +132,33 @@ const normalizeTemplate = (value) => ({
     })),
   })),
 });
+
+async function ensureTemplateRegionsAvailable({
+  name,
+  countries,
+  excludeId,
+}) {
+  const conflict = await GarmentTemplate.findOne({
+    ...(excludeId ? { _id: { $ne: excludeId } } : {}),
+    scope: "global",
+    name,
+    $or: [
+      { countries: { $in: countries } },
+      { countries: { $exists: false } },
+      { countries: { $size: 0 } },
+    ],
+  }).select("name countries");
+  if (!conflict) return;
+  const overlap = conflict.countries?.length
+    ? countries.filter((country) => conflict.countries.includes(country))
+    : countries;
+  throw new AppError(
+    409,
+    "GARMENT_TEMPLATE_REGION_CONFLICT",
+    `${name} already has a global template for: ${overlap.join(", ")}. Edit that template or choose different countries.`,
+    { templateId: conflict.id, countries: overlap },
+  );
+}
 
 const page = (req) => ({
   page: Math.max(1, Number(req.query.page) || 1),
@@ -606,6 +639,7 @@ async function templates(req, res) {
 }
 async function createTemplate(req, res) {
   const body = z.object({ template: templateInput }).parse(req.body);
+  await ensureTemplateRegionsAvailable(body.template);
   const row = await GarmentTemplate.create({
     studioId: null,
     scope: "global",
@@ -638,6 +672,13 @@ async function updateTemplate(req, res) {
           message: "This template changed elsewhere. Refresh and try again.",
         },
       });
+  if (row.scope === "global") {
+    await ensureTemplateRegionsAvailable({
+      name: body.name || row.name,
+      countries: body.countries || row.countries || SUPPORTED_GARMENT_COUNTRIES,
+      excludeId: row._id,
+    });
+  }
   const before = row.toObject();
   Object.assign(row, normalizeTemplate(body));
   await row.save();

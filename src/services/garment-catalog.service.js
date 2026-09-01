@@ -1,5 +1,6 @@
 const { nanoid } = require("nanoid");
 const { GarmentTemplate } = require("../models");
+const { SUPPORTED_GARMENT_COUNTRIES } = require("./garment-region.service");
 
 const measurement = (name, required = true) => ({
   name,
@@ -374,6 +375,7 @@ async function provisionStarterGarments(_studioId, audiences) {
               studioId: null,
               name: template.name,
               audience,
+              countries: SUPPORTED_GARMENT_COUNTRIES,
               fields: fieldsFor(template),
               customizationGroups: customizationGroupsFor(template),
             },
