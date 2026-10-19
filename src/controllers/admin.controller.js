@@ -46,7 +46,7 @@ const { send: sendNotification } = require("../services/notification.service");
 const { escapedSearch } = require("../utils/search");
 const r2 = require("../services/r2.service");
 const env = require("../config/env");
-const { SUPPORTED_GARMENT_COUNTRIES } = require("../services/garment-region.service");
+const { SUPPORTED_GARMENT_COUNTRIES, visibleTemplateFilter, studioCountry } = require("../services/garment-region.service");
 const diagramUrl = z
   .string()
   .trim()
@@ -555,7 +555,9 @@ async function orders(req, res) {
   const filter = { deletedAt: null };
   if (req.query.status) filter.status = req.query.status;
   if (req.query.studioId) filter.studioId = req.query.studioId;
-  const result = await list(Order, filter, { createdAt: -1 }, req, [
+  const sortField = ["createdAt", "deliveryDate", "totalPaise", "status"].includes(req.query.sortBy) ? req.query.sortBy : "createdAt";
+  const direction = req.query.sortOrder === "asc" ? 1 : -1;
+  const result = await list(Order, filter, { [sortField]: direction, _id: direction }, req, [
     { path: "studioId", select: "name" },
     { path: "customerId", select: "name phone" },
   ]);
@@ -563,15 +565,46 @@ async function orders(req, res) {
 }
 async function customers(req, res) {
   const q = queryText(req.query.q);
+  const country = req.query.country;
+  if (country && !SUPPORTED_GARMENT_COUNTRIES.includes(country))
+    throw new AppError(422, "INVALID_COUNTRY", "Choose a supported country.");
   const filter = {
     deletedAt: null,
     ...(q ? { $or: [{ name: q }, { phone: q }] } : {}),
   };
+  if (country) {
+    const countryFilter = country === "IN"
+      ? { $or: [{ "settings.country": "IN" }, { "settings.country": { $exists: false } }] }
+      : { "settings.country": country };
+    const studios = await Studio.find(countryFilter).select("_id");
+    filter.studioId = { $in: studios.map((studio) => studio._id) };
+  }
+  if (req.query.status) {
+    if (!["active", "inactive", "suspended"].includes(req.query.status))
+      throw new AppError(422, "INVALID_STATUS", "Choose a valid customer status.");
+    filter.status = req.query.status === "active" ? { $in: ["active", null] } : req.query.status;
+  }
   const result = await list(Customer, filter, { createdAt: -1 }, req, {
     path: "studioId",
-    select: "name",
+    select: "name settings.country",
   });
   res.json(result);
+}
+async function updateCustomer(req, res) {
+  const input = z.object({ status: z.enum(["active", "inactive", "suspended"]), version: z.number().int().nonnegative() }).parse(req.body);
+  const customer = await Customer.findOne({ _id: req.params.id, deletedAt: null });
+  if (!customer) throw notFound("Customer");
+  if (customer.version !== input.version)
+    throw new AppError(409, "EDIT_CONFLICT", "This customer changed elsewhere. Refresh and try again.");
+  const before = { status: customer.status || "active" };
+  customer.status = input.status;
+  await customer.save();
+  await auditAdmin(req, "customer.status_updated", "customer", customer, before, { status: customer.status });
+  res.json({ data: customer });
+}
+async function studioOptions(req, res) {
+  const rows = await Studio.find().select("name settings.country").sort({ name: 1, _id: 1 });
+  res.json({ data: rows });
 }
 async function enrichStudioRows(rows) {
   const studioIds = [
@@ -628,10 +661,19 @@ async function withDiagramUrls(rows) {
 }
 async function templates(req, res) {
   const q = queryText(req.query.q);
+  const filter = q ? { name: q } : {};
+  if (req.query.studioId === "global") filter.scope = "global";
+  else if (req.query.studioId) {
+    const studio = await Studio.findById(req.query.studioId);
+    if (!studio) throw notFound("Studio");
+    Object.assign(filter, visibleTemplateFilter(studio._id, studioCountry(studio)));
+  }
+  const sortField = ["createdAt", "updatedAt", "name", "audience"].includes(req.query.sortBy) ? req.query.sortBy : "createdAt";
+  const direction = req.query.sortOrder === "asc" ? 1 : -1;
   const result = await list(
     GarmentTemplate,
-    q ? { name: q } : {},
-    { createdAt: -1 },
+    filter,
+    { [sortField]: direction, _id: direction },
     req,
   );
   const rows = await enrichStudioRows(result.data);
@@ -1212,6 +1254,8 @@ module.exports = {
   orders,
   order,
   customers,
+  updateCustomer,
+  studioOptions,
   templates,
   createTemplate,
   updateTemplate,

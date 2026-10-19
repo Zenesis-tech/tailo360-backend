@@ -168,6 +168,8 @@ async function create(req, res) {
     deletedAt: null,
   });
   if (!customer) throw notFound("Customer");
+  if (customer.status && customer.status !== "active")
+    throw new AppError(422, "CUSTOMER_INACTIVE", "New orders cannot be created for an inactive or suspended customer.");
   const orderDate = body.orderDate || new Date();
   if (body.deliveryDate < orderDate)
     throw new AppError(

@@ -1612,6 +1612,34 @@ test('subscription catalogue migration replaces legacy Pro plans', async () => {
   ).toMatchObject({ plan: 'starter', seatLimit: 2 });
 });
 
+test('platform admin updates customer status and filters customers by studio country', async () => {
+  const indian = await createAccount('+919876543298');
+  const australian = await createAccount('+61412345298', { country: 'AU', timezone: 'Australia/Sydney', locale: 'en-AU' });
+  const { User, Customer } = require('../src/models');
+  await User.updateOne({ _id: indian.body.data.user.id }, { platformRole: 'admin' });
+  const authorization = `Bearer ${indian.body.data.accessToken}`;
+  const indianCustomer = await Customer.create({ studioId: indian.body.data.studioId, name: 'India client', phone: '+919000000298' });
+  const australianCustomer = await Customer.create({ studioId: australian.body.data.studioId, name: 'Australia client', phone: '+61400000298' });
+
+  const filtered = await request(app).get('/api/v1/admin/customers?country=AU').set('Authorization', authorization).expect(200);
+  expect(filtered.body.data.some((row) => row._id === australianCustomer.id)).toBe(true);
+  expect(filtered.body.data.some((row) => row._id === indianCustomer.id)).toBe(false);
+
+  const suspended = await request(app)
+    .patch(`/api/v1/admin/customers/${australianCustomer.id}`)
+    .set('Authorization', authorization)
+    .send({ status: 'suspended', version: australianCustomer.version })
+    .expect(200);
+  expect(suspended.body.data.status).toBe('suspended');
+  const statusRows = await request(app).get('/api/v1/admin/customers?country=AU&status=suspended').set('Authorization', authorization).expect(200);
+  expect(statusRows.body.data.some((row) => row._id === australianCustomer.id)).toBe(true);
+  await request(app)
+    .patch(`/api/v1/admin/customers/${australianCustomer.id}`)
+    .set('Authorization', authorization)
+    .send({ status: 'active', version: australianCustomer.version })
+    .expect(409);
+});
+
 test('platform admin can grant expiring test access without a store product', async () => {
   const verified = await createAccount('+919876543215');
   const { User, Subscription, SubscriptionPlan } = require('../src/models');

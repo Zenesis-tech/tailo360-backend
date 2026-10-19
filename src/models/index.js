@@ -162,6 +162,7 @@ const customerSchema = new Schema(
     notes: String,
     fitPreference: { type: String, enum: ["slim", "regular", "relaxed"] },
     preferredContact: { type: String, enum: ["call", "whatsapp", "sms"] },
+    status: { type: String, enum: ["active", "inactive", "suspended"], default: "active", index: true },
     deletedAt: Date,
   },
   base,
