@@ -15,23 +15,12 @@ const useOtpProvider = () => env.NODE_ENV === 'production' || env.OTP_DELIVERY_M
 const isDemoLogin = (phone) =>
   env.DEMO_ACCOUNT_ENABLED && isDemoPhone(phone);
 const phoneSchema = z.string().trim().transform((value) => value.replace(/\s|-/g, '')).refine((value) => /^\+?[1-9]\d{9,14}$/.test(value), 'Use a valid mobile number.').transform((value) => value.startsWith('+') ? value : `+91${value}`);
-const regions = {
-  IN: { currency: 'INR', dialCode: '+91', timezone: 'Asia/Kolkata', locale: 'en-IN' },
-  US: { currency: 'USD', dialCode: '+1', timezone: 'America/New_York', locale: 'en-US' },
-  CA: { currency: 'CAD', dialCode: '+1', timezone: 'America/Toronto', locale: 'en-CA' },
-  GB: { currency: 'GBP', dialCode: '+44', timezone: 'Europe/London', locale: 'en-GB' },
-  AU: { currency: 'AUD', dialCode: '+61', timezone: 'Australia/Sydney', locale: 'en-AU' },
-};
+const { regions, regionalProfile } = require('../utils/region-profile');
 const regionalInput = z.object({
   country: z.enum(Object.keys(regions)).optional(),
   timezone: z.string().trim().min(3).max(80).optional(),
   locale: z.string().trim().min(2).max(20).optional(),
 });
-function regionalProfile(input = {}) {
-  const country = input.country || 'IN';
-  const defaults = regions[country];
-  return { country, currency: defaults.currency, dialCode: defaults.dialCode, timezone: input.timezone || defaults.timezone, locale: input.locale || defaults.locale };
-}
 async function restoreAccountIfEligible(user) {
   if (user.deletedAt) {
     throw new AppError(403, 'ACCOUNT_DELETED', 'This account has been permanently deleted.');
@@ -110,8 +99,8 @@ async function finishPhoneAuthentication(phone, input, res, identity = {}) {
     user.firebaseUid = identity.firebaseUid;
     await user.save();
   }
-  if (user.country !== profile.country || !user.timezone) {
-    Object.assign(user, profile);
+  if (!user.country || !user.timezone) {
+    Object.assign(user, regionalProfile({ ...input, country: user.country || input.country }));
     await user.save();
   }
   const needsOnboarding = !isDemoLogin(phone) && member.role === 'owner'

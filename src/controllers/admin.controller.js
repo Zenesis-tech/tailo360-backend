@@ -47,6 +47,7 @@ const { escapedSearch } = require("../utils/search");
 const r2 = require("../services/r2.service");
 const env = require("../config/env");
 const { SUPPORTED_GARMENT_COUNTRIES, visibleTemplateFilter, studioCountry } = require("../services/garment-region.service");
+const { regionalProfile } = require("../utils/region-profile");
 const diagramUrl = z
   .string()
   .trim()
@@ -165,13 +166,14 @@ const page = (req) => ({
   limit: Math.min(100, Math.max(1, Number(req.query.limit) || 25)),
 });
 const queryText = (value) => escapedSearch(value);
-const list = async (Model, filter, sort, req, populate) => {
+const list = async (Model, filter, sort, req, populate, collation) => {
   const pagination = page(req);
   let query = Model.find(filter)
     .sort(sort)
     .skip((pagination.page - 1) * pagination.limit)
     .limit(pagination.limit);
   if (populate) query = query.populate(populate);
+  if (collation) query = query.collation(collation);
   const [data, total] = await Promise.all([
     query,
     Model.countDocuments(filter),
@@ -267,12 +269,17 @@ async function dashboard(req, res) {
 }
 async function users(req, res) {
   const q = queryText(req.query.q);
+  if (req.query.country && !SUPPORTED_GARMENT_COUNTRIES.includes(req.query.country))
+    throw new AppError(422, "INVALID_COUNTRY", "Choose a supported country.");
   const filter = {
     deletedAt: null,
     ...(req.query.country ? { country: req.query.country } : {}),
     ...(q ? { $or: [{ name: q }, { phone: q }, { email: q }] } : {}),
   };
-  const result = await list(User, filter, { createdAt: -1 }, req);
+  const sortField = req.query.sortBy === "name" ? "name" : "createdAt";
+  const direction = req.query.sortOrder === "asc" ? 1 : -1;
+  const result = await list(User, filter, { [sortField]: direction, _id: direction }, req, undefined,
+    sortField === "name" ? { locale: "en", strength: 2 } : undefined);
   const ids = result.data.map((user) => user._id);
   const memberships = await Member.find({
     userId: { $in: ids },
@@ -296,22 +303,37 @@ async function users(req, res) {
 }
 async function updateUser(req, res) {
   const input = z
-    .object({ platformRole: z.enum(["user", "admin", "support"]) })
+    .object({
+      version: z.number().int().nonnegative().optional(),
+      name: z.string().trim().min(2).max(100).optional(),
+      email: z.string().trim().email().max(254).nullable().optional(),
+      language: z.enum(["en", "hi", "gu", "mr"]).optional(),
+      country: z.enum(SUPPORTED_GARMENT_COUNTRIES).optional(),
+      platformRole: z.enum(["user", "admin", "support"]).optional(),
+    })
     .parse(req.body);
+  const { version, ...changes } = input;
+  if (!Object.keys(changes).length)
+    throw new AppError(422, "NO_USER_CHANGES", "Provide user details to update.");
   const user = await User.findById(req.params.id);
   if (!user || user.deletedAt) throw notFound("User");
-  if (user.id === req.auth.user.id && input.platformRole !== "admin")
+  if (version !== undefined && user.version !== version)
+    throw new AppError(409, "EDIT_CONFLICT", "This user changed elsewhere. Refresh and try again.");
+  if (user.id === req.auth.user.id && changes.platformRole && changes.platformRole !== "admin")
     throw new AppError(
       422,
       "CANNOT_DEMOTE_SELF",
       "You cannot remove your own platform-admin access.",
     );
-  const before = { platformRole: user.platformRole };
-  user.platformRole = input.platformRole;
+  const before = user.toObject();
+  const countryChanged = changes.country && changes.country !== user.country;
+  if (changes.name !== undefined) user.name = changes.name;
+  if (changes.email !== undefined) user.email = changes.email || undefined;
+  if (changes.language !== undefined) user.language = changes.language;
+  if (changes.platformRole !== undefined) user.platformRole = changes.platformRole;
+  if (countryChanged) Object.assign(user, regionalProfile({ country: changes.country }));
   await user.save();
-  await auditAdmin(req, "user.platform_role_updated", "user", user, before, {
-    platformRole: user.platformRole,
-  });
+  await auditAdmin(req, Object.keys(changes).length === 1 && changes.platformRole ? "user.platform_role_updated" : "user.updated", "user", user, before, user.toObject());
   res.json({ data: user });
 }
 async function resetUserPassword(req, res) {
@@ -339,11 +361,15 @@ async function studios(req, res) {
     ...(q ? { name: q } : {}),
     ...(req.query.country ? { "settings.country": req.query.country } : {}),
   };
+  const sortField = req.query.sortBy === "name" ? "name" : "createdAt";
+  const direction = req.query.sortOrder === "asc" ? 1 : -1;
   const result = await list(
     Studio,
     filter,
-    { createdAt: -1 },
+    { [sortField]: direction, _id: direction },
     req,
+    undefined,
+    sortField === "name" ? { locale: "en", strength: 2 } : undefined,
   );
   const ids = result.data.map((studio) => studio._id);
   const [subs, counts] = await Promise.all([
@@ -675,6 +701,8 @@ async function templates(req, res) {
     filter,
     { [sortField]: direction, _id: direction },
     req,
+    undefined,
+    sortField === "name" ? { locale: "en", strength: 2 } : undefined,
   );
   const rows = await enrichStudioRows(result.data);
   res.json({ data: await withDiagramUrls(rows), meta: result.meta });

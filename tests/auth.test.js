@@ -1612,6 +1612,47 @@ test('subscription catalogue migration replaces legacy Pro plans', async () => {
   ).toMatchObject({ plan: 'starter', seatLimit: 2 });
 });
 
+test('platform admin edits users and sorts and filters them by country', async () => {
+  const adminAccount = await createAccount('+919876543295');
+  const otherAccount = await createAccount('+919876543294');
+  const { User, Studio } = require('../src/models');
+  await User.updateOne({ _id: adminAccount.body.data.user.id }, { platformRole: 'admin' });
+  const authorization = `Bearer ${adminAccount.body.data.accessToken}`;
+  const adminUser = await User.findById(adminAccount.body.data.user.id);
+
+  const edited = await request(app)
+    .patch(`/api/v1/admin/users/${adminUser.id}`)
+    .set('Authorization', authorization)
+    .send({ version: adminUser.version, name: 'Alpha User Sort Test', email: 'alpha-sort@example.test', country: 'AU', language: 'hi', platformRole: 'admin' })
+    .expect(200);
+  expect(edited.body.data).toMatchObject({ name: 'Alpha User Sort Test', email: 'alpha-sort@example.test', country: 'AU', currency: 'AUD', language: 'hi' });
+  const studio = await Studio.findById(adminAccount.body.data.studioId);
+  expect(studio.settings).toMatchObject({ country: 'IN', currency: 'INR' });
+
+  const otherUser = await User.findById(otherAccount.body.data.user.id);
+  await request(app)
+    .patch(`/api/v1/admin/users/${otherUser.id}`)
+    .set('Authorization', authorization)
+    .send({ version: otherUser.version, name: 'zebra User Sort Test' })
+    .expect(200);
+  const users = await request(app).get('/api/v1/admin/users')
+    .query({ q: 'User Sort Test', sortBy: 'name', sortOrder: 'asc' })
+    .set('Authorization', authorization).expect(200);
+  expect(users.body.data.map((user) => user.name)).toEqual(['Alpha User Sort Test', 'zebra User Sort Test']);
+  const australianUsers = await request(app).get('/api/v1/admin/users')
+    .query({ country: 'AU', q: 'User Sort Test' })
+    .set('Authorization', authorization).expect(200);
+  expect(australianUsers.body.data.map((user) => user._id)).toEqual([adminUser.id]);
+
+  const signedInAgain = await createAccount('+919876543295');
+  expect(signedInAgain.body.data.user.country).toBe('AU');
+  await request(app)
+    .patch(`/api/v1/admin/users/${adminUser.id}`)
+    .set('Authorization', authorization)
+    .send({ version: adminUser.version, name: 'Stale update' })
+    .expect(409);
+});
+
 test('platform admin updates customer status and filters customers by studio country', async () => {
   const indian = await createAccount('+919876543298');
   const australian = await createAccount('+61412345298', { country: 'AU', timezone: 'Australia/Sydney', locale: 'en-AU' });
@@ -1638,6 +1679,27 @@ test('platform admin updates customer status and filters customers by studio cou
     .set('Authorization', authorization)
     .send({ status: 'active', version: australianCustomer.version })
     .expect(409);
+});
+
+test('platform admin sorts studios and garment templates alphabetically', async () => {
+  const account = await createAccount('+919876543297');
+  const { User, Studio, GarmentTemplate } = require('../src/models');
+  await User.updateOne({ _id: account.body.data.user.id }, { platformRole: 'admin' });
+  const authorization = `Bearer ${account.body.data.accessToken}`;
+  await Studio.updateOne({ _id: account.body.data.studioId }, { name: 'zebra Sort Studio Test' });
+  const other = await createAccount('+919876543296');
+  await Studio.updateOne({ _id: other.body.data.studioId }, { name: 'Alpha Sort Studio Test' });
+  const studios = await request(app).get('/api/v1/admin/studios')
+    .query({ q: 'Sort Studio Test', sortBy: 'name', sortOrder: 'asc' })
+    .set('Authorization', authorization).expect(200);
+  expect(studios.body.data.map((studio) => studio.name)).toEqual(['Alpha Sort Studio Test', 'zebra Sort Studio Test']);
+
+  await GarmentTemplate.create({ scope: 'global', name: 'zebra Sort Garment Test', countries: ['IN'] });
+  await GarmentTemplate.create({ scope: 'global', name: 'Alpha Sort Garment Test', countries: ['IN'] });
+  const templates = await request(app).get('/api/v1/admin/garment-templates')
+    .query({ q: 'Sort Garment Test', sortBy: 'name', sortOrder: 'asc' })
+    .set('Authorization', authorization).expect(200);
+  expect(templates.body.data.map((template) => template.name)).toEqual(['Alpha Sort Garment Test', 'zebra Sort Garment Test']);
 });
 
 test('platform admin can grant expiring test access without a store product', async () => {
