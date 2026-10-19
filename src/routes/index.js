@@ -297,6 +297,12 @@ router.get(
   subscriptions.adminListPlans,
 );
 router.post(
+  "/admin/subscription-plans/play-prices/refresh",
+  authenticate,
+  requirePlatformAdmin,
+  subscriptions.adminRefreshPlayPrices,
+);
+router.post(
   "/admin/subscription-plans",
   authenticate,
   requirePlatformAdmin,

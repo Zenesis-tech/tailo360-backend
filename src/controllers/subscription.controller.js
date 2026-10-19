@@ -5,6 +5,10 @@ const { verifyPurchase, planFor } = require('../services/store-verification.serv
 const { rewardReferralForStudio, expireReferrals } = require('../services/subscription-lifecycle.service');
 const { auditAdmin } = require('../services/audit.service');
 const { send: sendNotification } = require('../services/notification.service');
+const {
+  googlePlayRegionalCatalog,
+  clearGooglePlayCatalogCache,
+} = require('../services/google-play-catalog.service');
 function get(req, res) {
   res.set("Cache-Control", "no-store");
   res.json({ data: req.auth.subscription });
@@ -41,7 +45,39 @@ async function validatePurchase(req, res) {
   res.json({ data: subscription });
 }
 const planInput = z.object({ code: z.enum(['starter', 'studio']), name: z.string().trim().min(2).max(50), description: z.string().trim().max(300).optional(), active: z.boolean().optional(), trialDays: z.number().int().min(0).max(90), monthlyPricePaise: z.number().int().min(0), yearlyPricePaise: z.number().int().min(0), limits: z.object({ customers: z.literal(-1), ordersPerMonth: z.literal(-1), staffSeats: z.number().int().min(1) }), features: z.array(z.string().trim().min(1).max(100)).max(30), storeProducts: z.array(z.object({ platform: z.enum(['google', 'apple']), productId: z.string().trim().min(1).max(150), period: z.enum(['monthly', 'yearly']), active: z.boolean().default(true), countries: z.array(z.enum(['IN', 'US', 'CA', 'GB', 'AU'])).max(5).optional() })).max(12) });
-async function adminListPlans(req, res) { res.json({ data: await SubscriptionPlan.find().sort({ monthlyPricePaise: 1 }) }); }
+async function adminListPlans(req, res) {
+  const rows = await SubscriptionPlan.find().sort({ monthlyPricePaise: 1 });
+  const googlePlay = await googlePlayRegionalCatalog(rows, {
+    force: req.query.refreshPlay === 'true',
+  });
+  const byProductId = new Map(
+    googlePlay.products.map((product) => [product.productId, product]),
+  );
+  const data = rows.map((row) => {
+    const value = row.toObject();
+    value.googlePlay = {
+      status: googlePlay.status,
+      message: googlePlay.message,
+      syncedAt: googlePlay.syncedAt,
+      products: (row.storeProducts || [])
+        .filter((product) => product.platform === 'google' && product.active !== false)
+        .map((product) => ({
+          productId: product.productId,
+          configuredPeriod: product.period,
+          countries: product.countries,
+          ...(byProductId.get(product.productId) || {}),
+        })),
+    };
+    return value;
+  });
+  res.json({ data });
+}
+async function adminRefreshPlayPrices(req, res) {
+  clearGooglePlayCatalogCache();
+  const rows = await SubscriptionPlan.find().select('storeProducts');
+  const googlePlay = await googlePlayRegionalCatalog(rows, { force: true });
+  res.json({ data: googlePlay });
+}
 async function adminCreatePlan(req, res) { const plan = await SubscriptionPlan.create(planInput.parse(req.body)); await auditAdmin(req, 'subscription_plan.created', 'subscription_plan', plan, undefined, plan); res.status(201).json({ data: plan }); }
 async function adminUpdatePlan(req, res) { const before = await SubscriptionPlan.findById(req.params.id); const plan = await SubscriptionPlan.findByIdAndUpdate(req.params.id, planInput.partial().parse(req.body), { new: true, runValidators: true }); if (!plan) throw new AppError(404, 'NOT_FOUND', 'Subscription plan was not found.'); await auditAdmin(req, 'subscription_plan.updated', 'subscription_plan', plan, before, plan); res.json({ data: plan }); }
 const offerInput = z.object({
@@ -69,4 +105,4 @@ const offerInput = z.object({
 async function adminListOffers(req, res) { res.json({ data: await SubscriptionOffer.find().sort({ createdAt: -1 }) }); }
 async function adminCreateOffer(req, res) { const offer = await SubscriptionOffer.create(offerInput.parse(req.body)); await auditAdmin(req, 'subscription_offer.created', 'subscription_offer', offer, undefined, offer); res.status(201).json({ data: offer }); }
 async function adminUpdateOffer(req, res) { const before = await SubscriptionOffer.findById(req.params.id); const offer = await SubscriptionOffer.findByIdAndUpdate(req.params.id, offerInput.partial().parse(req.body), { new: true, runValidators: true }); if (!offer) throw new AppError(404, 'NOT_FOUND', 'Subscription offer was not found.'); await auditAdmin(req, 'subscription_offer.updated', 'subscription_offer', offer, before, offer); res.json({ data: offer }); }
-module.exports = { get, usage, plans, products, validatePurchase, adminListPlans, adminCreatePlan, adminUpdatePlan, adminListOffers, adminCreateOffer, adminUpdateOffer };
+module.exports = { get, usage, plans, products, validatePurchase, adminListPlans, adminRefreshPlayPrices, adminCreatePlan, adminUpdatePlan, adminListOffers, adminCreateOffer, adminUpdateOffer };
