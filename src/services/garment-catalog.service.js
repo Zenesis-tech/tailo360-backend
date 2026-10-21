@@ -2,6 +2,18 @@ const { nanoid } = require("nanoid");
 const { GarmentTemplate } = require("../models");
 const { SUPPORTED_GARMENT_COUNTRIES } = require("./garment-region.service");
 
+// These starter patterns are specific to the Indian catalogue. Platform admins
+// can still create separate global templates for any country they select.
+const indiaOnlyStarterNames = new Set([
+  "Kurta", "Pyjama", "Nehru jacket", "Sherwani", "Safari suit",
+  "Blouse", "Kurti", "Kameez", "Salwar", "Salwar suit", "Churidar",
+  "Lehenga", "Anarkali", "Kids kurta pyjama", "Kids lehenga",
+]);
+
+function starterCountriesFor(name) {
+  return indiaOnlyStarterNames.has(name) ? ["IN"] : SUPPORTED_GARMENT_COUNTRIES;
+}
+
 const measurement = (name, required = true) => ({
   name,
   unit: "in",
@@ -375,7 +387,7 @@ async function provisionStarterGarments(_studioId, audiences) {
               studioId: null,
               name: template.name,
               audience,
-              countries: SUPPORTED_GARMENT_COUNTRIES,
+              countries: starterCountriesFor(template.name),
               fields: fieldsFor(template),
               customizationGroups: customizationGroupsFor(template),
             },
@@ -393,4 +405,5 @@ module.exports = {
   fieldsFor,
   customizationGroupsFor,
   provisionStarterGarments,
+  starterCountriesFor,
 };

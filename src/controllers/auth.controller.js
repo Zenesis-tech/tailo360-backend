@@ -10,11 +10,21 @@ const otpProvider = require('../services/otp-provider.service');
 const { verifyPassword } = require('../services/password.service');
 const { firebaseAdmin } = require('../services/firebase-admin.service');
 const { isDemoPhone, ensureDemoStudio, seedDemoStudio } = require('../services/demo-account.service');
-const { purgeAccount } = require('../services/account-purge.service');
+const { normalizeRegionalPhone } = require('../utils/regional-phone');
 const useOtpProvider = () => env.NODE_ENV === 'production' || env.OTP_DELIVERY_MODE === 'provider';
 const isDemoLogin = (phone) =>
   env.DEMO_ACCOUNT_ENABLED && isDemoPhone(phone);
-const phoneSchema = z.string().trim().transform((value) => value.replace(/\s|-/g, '')).refine((value) => /^\+?[1-9]\d{9,14}$/.test(value), 'Use a valid mobile number.').transform((value) => value.startsWith('+') ? value : `+91${value}`);
+const phoneSchema = z.string().trim().min(8).max(25).regex(/^[+\d\s().-]+$/);
+function normalizeLoginPhone(value, country) {
+  const compact = value.replace(/[\s().-]/g, '');
+  if (!country && compact.startsWith('+')) {
+    if (!/^\+[1-9]\d{7,14}$/.test(compact)) {
+      throw new AppError(422, 'PHONE_INVALID', 'Use a valid mobile number.');
+    }
+    return compact;
+  }
+  return normalizeRegionalPhone(value, country || 'IN');
+}
 const { regions, regionalProfile } = require('../utils/region-profile');
 const regionalInput = z.object({
   country: z.enum(Object.keys(regions)).optional(),
@@ -25,10 +35,21 @@ async function restoreAccountIfEligible(user) {
   if (user.deletedAt) {
     throw new AppError(403, 'ACCOUNT_DELETED', 'This account has been permanently deleted.');
   }
-  if (user.deletionScheduledFor) {
-    throw new AppError(403, 'ACCOUNT_DELETED', 'This account has been permanently deleted.');
-  }
-  return false;
+  if (!user.deletionScheduledFor) return false;
+  const restored = await User.findOneAndUpdate(
+    {
+      _id: user._id,
+      deletedAt: null,
+      deletionScheduledFor: { $gt: new Date() },
+      purgeStartedAt: null,
+    },
+    { $set: { deletionRequestedAt: null, deletionScheduledFor: null, purgeLastError: null } },
+    { new: true },
+  );
+  if (!restored) throw new AppError(403, 'ACCOUNT_DELETED', 'The 30-day recovery period has ended.');
+  user.deletionRequestedAt = null;
+  user.deletionScheduledFor = null;
+  return true;
 }
 function authConfig(req, res) { res.json({ data: { phoneAuthMode: env.PHONE_AUTH_MODE } }); }
 async function supportedRegions(req, res) {
@@ -44,10 +65,11 @@ async function ensureRegionActive(country) {
 function ensurePhoneMatchesRegion(phone, country) {
   if (country && !phone.startsWith(regions[country].dialCode)) throw new AppError(422, 'PHONE_COUNTRY_MISMATCH', 'The phone number does not match the selected country.');
 }
-async function requestOtp(req, res) { if (env.PHONE_AUTH_MODE !== 'server') throw new AppError(409, 'PHONE_AUTH_PROVIDER_DISABLED', 'Server SMS verification is currently disabled.'); const phone = phoneSchema.parse(req.body.phone); const region = regionalInput.parse(req.body); await ensureRegionActive(region.country); ensurePhoneMatchesRegion(phone, region.country); if (isDemoLogin(phone)) return res.status(202).json({ data: { phone, expiresInSeconds: env.OTP_TTL_MINUTES * 60, demo: true } }); if (useOtpProvider()) { await otpProvider.sendOtp(phone); return res.status(202).json({ data: { phone, expiresInSeconds: env.OTP_TTL_MINUTES * 60 } }); } const code = '123456'; await Otp.deleteMany({ phone }); await Otp.create({ phone, codeHash: hash(code), expiresAt: new Date(Date.now() + env.OTP_TTL_MINUTES * 60000) }); res.status(202).json({ data: { phone, expiresInSeconds: env.OTP_TTL_MINUTES * 60, ...(env.EXPOSE_DEV_OTP ? { developmentCode: code } : {}) } }); }
+async function requestOtp(req, res) { if (env.PHONE_AUTH_MODE !== 'server') throw new AppError(409, 'PHONE_AUTH_PROVIDER_DISABLED', 'Server SMS verification is currently disabled.'); const region = regionalInput.parse(req.body); const phone = normalizeLoginPhone(phoneSchema.parse(req.body.phone), region.country); await ensureRegionActive(region.country); if (isDemoLogin(phone)) return res.status(202).json({ data: { phone, expiresInSeconds: env.OTP_TTL_MINUTES * 60, demo: true } }); if (useOtpProvider()) { await otpProvider.sendOtp(phone); return res.status(202).json({ data: { phone, expiresInSeconds: env.OTP_TTL_MINUTES * 60 } }); } const code = '123456'; await Otp.deleteMany({ phone }); await Otp.create({ phone, codeHash: hash(code), expiresAt: new Date(Date.now() + env.OTP_TTL_MINUTES * 60000) }); res.status(202).json({ data: { phone, expiresInSeconds: env.OTP_TTL_MINUTES * 60, ...(env.EXPOSE_DEV_OTP ? { developmentCode: code } : {}) } }); }
 async function verifyOtp(req, res) {
   if (env.PHONE_AUTH_MODE !== 'server') throw new AppError(409, 'PHONE_AUTH_PROVIDER_DISABLED', 'Server SMS verification is currently disabled.');
   const body = z.object({ phone: phoneSchema, code: z.string().regex(/^\d{6}$/), studioName: z.string().trim().min(2).max(80).optional(), referralCode: z.string().trim().toUpperCase().max(10).optional(), garmentAudiences: z.array(z.enum(['men', 'women', 'kids', 'unisex'])).min(1).max(4).optional() }).and(regionalInput).parse(req.body);
+  body.phone = normalizeLoginPhone(body.phone, body.country);
   await ensureRegionActive(body.country);
   ensurePhoneMatchesRegion(body.phone, body.country);
   if (isDemoLogin(body.phone)) { if (body.code !== '111111') throw new AppError(401, 'OTP_INVALID', 'The code is invalid or expired.'); } else if (useOtpProvider()) { if (!await otpProvider.verifyOtp(body.phone, body.code)) throw new AppError(401, 'OTP_INVALID', 'The code is invalid or expired.'); } else { const otp = await Otp.findOne({ phone: body.phone }).sort({ createdAt: -1 }); if (!otp || otp.expiresAt < new Date() || otp.codeHash !== hash(body.code)) throw new AppError(401, 'OTP_INVALID', 'The code is invalid or expired.'); await Otp.deleteMany({ phone: body.phone }); }
@@ -126,6 +148,7 @@ async function firebasePhone(req, res) {
     throw new AppError(401, 'FIREBASE_PHONE_REQUIRED', 'A verified Firebase phone number is required.');
   }
   const phone = phoneSchema.parse(decoded.phone_number);
+  if (!/^\+[1-9]\d{7,14}$/.test(phone)) throw new AppError(401, 'FIREBASE_PHONE_REQUIRED', 'A verified Firebase phone number is required.');
   ensurePhoneMatchesRegion(phone, input.country);
   return finishPhoneAuthentication(phone, input, res, { firebaseUid: decoded.uid });
 }
@@ -155,7 +178,7 @@ async function refresh(req, res) {
   const session = await Session.findOne({ tokenId: payload.tokenId, userId: payload.sub, revokedAt: null, expiresAt: { $gt: new Date() } });
   if (!session) throw new AppError(401, 'TOKEN_INVALID', 'Refresh token is revoked or expired.');
   const [user, member] = await Promise.all([
-    User.findOne({ _id: payload.sub, deletedAt: null }),
+    User.findOne({ _id: payload.sub, deletedAt: null, deletionScheduledFor: null }),
     Member.findOne({ _id: payload.memberId, userId: payload.sub, studioId: payload.studioId, status: { $in: ['active', 'limited'] } }),
   ]);
   if (!user || !member) {
@@ -185,16 +208,15 @@ async function updatePreferences(req, res) {
 }
 async function scheduleAccountDeletion(req, res) {
   const now = new Date();
+  const deletionScheduledFor = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
   req.auth.user.deletionRequestedAt = now;
-  // Set the marker to now so deletion never depends on a later cron run.
-  req.auth.user.deletionScheduledFor = now;
+  req.auth.user.deletionScheduledFor = deletionScheduledFor;
   req.auth.user.purgeStartedAt = null;
   req.auth.user.purgeLastError = null;
   await Promise.all([
     req.auth.user.save(),
     Session.updateMany({ userId: req.auth.user._id, revokedAt: null }, { revokedAt: now }),
   ]);
-  await purgeAccount(req.auth.user._id, now);
-  res.json({ data: { deletedAt: now.toISOString() } });
+  res.json({ data: { deletionScheduledFor: deletionScheduledFor.toISOString() } });
 }
 module.exports = { authConfig, supportedRegions, requestOtp, verifyOtp, firebasePhone, google, adminLogin, refresh, logout, me, updatePreferences, scheduleAccountDeletion };

@@ -22,7 +22,11 @@ function visibleTemplateFilter(studioId, country) {
   return {
     $or: [
       globalTemplateCountryFilter(country),
-      { studioId, scope: { $ne: "global" } },
+      {
+        studioId,
+        scope: { $ne: "global" },
+        $or: [{ region: country }, { region: { $exists: false } }, { region: null }],
+      },
     ],
   };
 }

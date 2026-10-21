@@ -73,7 +73,28 @@ test("CSV is UTF-8, escaped, and contains authoritative detail", () => {
   expect(csv.charCodeAt(0)).toBe(0xfeff);
   expect(csv).toContain("ORDER DETAILS");
   expect(csv).toContain("TL-1");
-  expect(csv).toContain("Rs 2,500.00");
+  expect(csv).toContain("INR 2,500.00");
+});
+
+test.each([
+  ["US", "USD", "en-US", "America/New_York", "Jul 31, 2026"],
+  ["CA", "CAD", "en-CA", "America/Toronto", "Jul 31, 2026"],
+  ["GB", "GBP", "en-GB", "Europe/London", "01 Aug 2026"],
+  ["AU", "AUD", "en-AU", "Australia/Sydney", "01 Aug 2026"],
+])("%s export uses its local date and currency", async (country, currency, locale, timezone, date) => {
+  const regionalMeta = { ...meta, country, currency, locale, timezone };
+  const csv = csvFor(report(1), regionalMeta).toString("utf8");
+  expect(csv).toContain(`${currency} 2,500.00`);
+  expect(csv).toContain(date);
+  const regionalReport = report(1);
+  regionalReport.orderRows[0].createdAt = new Date('2026-08-01T01:00:00.000Z');
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(await xlsxFor(regionalReport, regionalMeta));
+  expect(workbook.getWorksheet("Orders").getColumn(8).numFmt).toContain(currency);
+  const localOrderDate = workbook.getWorksheet("Orders").getCell('D2').value;
+  expect(localOrderDate.toISOString().slice(0, 10)).toBe(
+    ['US', 'CA'].includes(country) ? '2026-07-31' : '2026-08-01',
+  );
 });
 
 test("all formats support an empty-data report", async () => {

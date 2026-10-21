@@ -74,15 +74,40 @@ async function createAccount(phone, options = {}) {
     .expect(200);
 }
 
+test('three month trials clamp month end dates without rolling into another month', () => {
+  const { threeMonthsAfter } = require('../src/services/auth.service');
+  expect(threeMonthsAfter(new Date('2026-01-31T12:34:56.000Z')).toISOString())
+    .toBe('2026-04-30T12:34:56.000Z');
+  expect(threeMonthsAfter(new Date('2023-11-30T12:34:56.000Z')).toISOString())
+    .toBe('2024-02-29T12:34:56.000Z');
+});
+
 test('OTP provisions a studio and returns a usable token', async () => {
+  const trialStartedAfter = Date.now();
   const verified = await createAccount('+919876543210');
   expect(verified.body.data.isNew).toBe(true);
   const profile = await request(app)
     .get('/api/v1/auth/me')
     .set('Authorization', `Bearer ${verified.body.data.accessToken}`)
     .expect(200);
-  expect(profile.body.data.subscription.status).toBe('trial');
-  expect(new Date(profile.body.data.subscription.trialEndsAt).getTime()).toBeGreaterThan(Date.now());
+  expect(profile.body.data.subscription).toMatchObject({
+    status: 'trial',
+    plan: 'studio',
+    entitlementSource: 'trial',
+    seatLimit: 5,
+  });
+  const trialEndsAt = profile.body.data.subscription.trialEndsAt;
+  const trialDuration = new Date(trialEndsAt).getTime() - trialStartedAfter;
+  expect(trialDuration).toBeGreaterThan(89 * 86400000);
+  expect(trialDuration).toBeLessThan(93 * 86400000);
+
+  const returning = await createAccount('+919876543210');
+  expect(returning.body.data.isNew).toBe(false);
+  const returningProfile = await request(app)
+    .get('/api/v1/auth/me')
+    .set('Authorization', `Bearer ${returning.body.data.accessToken}`)
+    .expect(200);
+  expect(returningProfile.body.data.subscription.trialEndsAt).toBe(trialEndsAt);
 });
 
 test('international OTP persists an E.164 identity and regional profile', async () => {
@@ -108,6 +133,35 @@ test('international OTP persists an E.164 identity and regional profile', async 
     dialCode: '+61',
     timezone: 'Australia/Sydney',
   });
+  const profileUpdate = await request(app)
+    .patch('/api/v1/studio')
+    .set('Authorization', `Bearer ${verified.body.data.accessToken}`)
+    .send({ ownerPhone: '0412345678' })
+    .expect(200);
+  expect(profileUpdate.body.data.owner.phone).toBe('+61412345678');
+  const templates = await request(app)
+    .get('/api/v1/garment-templates?active=true')
+    .set('Authorization', `Bearer ${verified.body.data.accessToken}`)
+    .expect(200);
+  const priced = await request(app)
+    .put(`/api/v1/pricing/${templates.body.data[0]._id}`)
+    .set('Authorization', `Bearer ${verified.body.data.accessToken}`)
+    .send({ amountPaise: 2500 })
+    .expect(200);
+  expect(priced.body.data.currency).toBe('AUD');
+});
+
+test.each([
+  ['US', '4155552671', '+14155552671'],
+  ['CA', '4165552671', '+14165552671'],
+  ['GB', '02079460018', '+442079460018'],
+  ['AU', '0412345678', '+61412345678'],
+])('%s OTP accepts local numbers and returns E.164', async (country, local, expected) => {
+  const requested = await request(app)
+    .post('/api/v1/auth/otp/request')
+    .send({ phone: local, country })
+    .expect(202);
+  expect(requested.body.data.phone).toBe(expected);
 });
 
 test('customer and staff phones inherit the owner studio region', async () => {
@@ -250,14 +304,14 @@ test('staff plans exclude the owner and limit only active staff members', async 
   const owner = await createAccount('+919876543250');
   const authorization = `Bearer ${owner.body.data.accessToken}`;
 
-  for (const [index, role] of ['master_tailor', 'front_desk'].entries()) {
+  for (const index of [0, 1, 2, 3, 4]) {
     await request(app)
       .post('/api/v1/studio/members')
       .set('Authorization', authorization)
       .send({
         name: `Staff Member ${index + 1}`,
         phone: `+91900000025${index}`,
-        role,
+        role: index % 2 === 0 ? 'master_tailor' : 'front_desk',
       })
       .expect(201);
   }
@@ -266,8 +320,8 @@ test('staff plans exclude the owner and limit only active staff members', async 
     .post('/api/v1/studio/members')
     .set('Authorization', authorization)
     .send({
-      name: 'Staff Member 3',
-      phone: '+919000000252',
+      name: 'Staff Member 6',
+      phone: '+919000000255',
       role: 'front_desk',
     })
     .expect(403);
@@ -277,7 +331,7 @@ test('staff plans exclude the owner and limit only active staff members', async 
     .get('/api/v1/subscription/usage')
     .set('Authorization', authorization)
     .expect(200);
-  expect(usage.body.data).toEqual({ staff: 2, limits: { staffSeats: 2 } });
+  expect(usage.body.data).toEqual({ staff: 5, limits: { staffSeats: 5 } });
 });
 
 test('language preference persists and is returned by the authenticated profile', async () => {
@@ -305,7 +359,7 @@ test('language preference persists and is returned by the authenticated profile'
   expect(invalid.body.error.code).toBe('VALIDATION_ERROR');
 });
 
-test('account deletion immediately removes the account and studio data', async () => {
+test('account deletion schedules a 30-day recovery period and login restores data', async () => {
   const phone = '+919876543212';
   const verified = await createAccount(phone);
   const authorization = `Bearer ${verified.body.data.accessToken}`;
@@ -314,16 +368,54 @@ test('account deletion immediately removes the account and studio data', async (
     .delete('/api/v1/users/me')
     .set('Authorization', authorization)
     .expect(200);
-  expect(deleted.body.data.deletedAt).toBeTruthy();
+  const deletionScheduledFor = new Date(deleted.body.data.deletionScheduledFor);
+  expect(deletionScheduledFor.getTime() - Date.now()).toBeGreaterThan(29 * 86400000);
+  expect(deletionScheduledFor.getTime() - Date.now()).toBeLessThanOrEqual(30 * 86400000);
   await request(app)
     .get('/api/v1/auth/me')
     .set('Authorization', authorization)
     .expect(401);
 
   const { User, Studio, Member } = require('../src/models');
+  expect(await User.findOne({ phone })).not.toBeNull();
+  expect(await Studio.findById(verified.body.data.studioId)).not.toBeNull();
+  expect(await Member.findOne({ studioId: verified.body.data.studioId })).not.toBeNull();
+
+  const { purgeExpiredAccounts } = require('../src/services/account-purge.service');
+  expect((await purgeExpiredAccounts()).purged).toBe(0);
+  const restored = await createAccount(phone);
+  expect(restored.body.data.accountRestored).toBe(true);
+  expect(restored.body.data.studioId).toBe(verified.body.data.studioId);
+  expect((await User.findOne({ phone })).deletionScheduledFor).toBeNull();
+  await request(app)
+    .get('/api/v1/auth/me')
+    .set('Authorization', `Bearer ${restored.body.data.accessToken}`)
+    .expect(200);
+});
+
+test('login after the recovery deadline cannot restore the account', async () => {
+  const phone = '+919876543213';
+  const verified = await createAccount(phone);
+  await request(app)
+    .delete('/api/v1/users/me')
+    .set('Authorization', `Bearer ${verified.body.data.accessToken}`)
+    .expect(200);
+  const { User } = require('../src/models');
+  await User.updateOne({ phone }, { deletionScheduledFor: new Date(Date.now() - 1000) });
+
+  await request(app)
+    .post('/api/v1/auth/otp/request')
+    .send({ phone })
+    .expect(202);
+  const login = await request(app)
+    .post('/api/v1/auth/otp/verify')
+    .send({ phone, code: '123456' })
+    .expect(403);
+  expect(login.body.error.code).toBe('ACCOUNT_DELETED');
+  expect((await User.findOne({ phone })).deletionScheduledFor).not.toBeNull();
+  const { purgeExpiredAccounts } = require('../src/services/account-purge.service');
+  expect((await purgeExpiredAccounts()).purged).toBe(1);
   expect(await User.findOne({ phone })).toBeNull();
-  expect(await Studio.findById(verified.body.data.studioId)).toBeNull();
-  expect(await Member.findOne({ studioId: verified.body.data.studioId })).toBeNull();
 });
 
 test('expired owner deletion permanently purges the studio, CRM data and media', async () => {
@@ -1293,6 +1385,27 @@ test('platform garment templates and measurements are managed by studio country'
     .get('/api/v1/garment-templates?active=true')
     .set('Authorization', `Bearer ${australian.body.data.accessToken}`)
     .expect(200);
+  expect(indiaList.body.data.some((row) => row.name === 'Kurta')).toBe(true);
+  expect(australiaList.body.data.some((row) => row.name === 'Kurta')).toBe(false);
+  expect(australiaList.body.data.some((row) => row.name === 'Shirt')).toBe(true);
+  const { GarmentTemplate } = require('../src/models');
+  const { migrateStarterGarmentCountries } = require('../src/scripts/migrate-starter-garment-countries');
+  await GarmentTemplate.updateOne(
+    { scope: 'global', name: 'Kurta' },
+    { $set: { countries: ['IN', 'US', 'CA', 'GB', 'AU'] } },
+  );
+  const legacyList = await request(app)
+    .get('/api/v1/garment-templates?active=true')
+    .set('Authorization', `Bearer ${australian.body.data.accessToken}`)
+    .expect(200);
+  expect(legacyList.body.data.some((row) => row.name === 'Kurta')).toBe(true);
+  const migration = await migrateStarterGarmentCountries({ apply: true });
+  expect(migration.matched).toContain('Kurta');
+  const migratedList = await request(app)
+    .get('/api/v1/garment-templates?active=true')
+    .set('Authorization', `Bearer ${australian.body.data.accessToken}`)
+    .expect(200);
+  expect(migratedList.body.data.some((row) => row.name === 'Kurta')).toBe(false);
   expect(indiaList.body.data.find((row) => row.name === name)).toMatchObject({
     _id: indiaTemplate.body.data._id,
     countries: ['IN'],
@@ -1619,6 +1732,12 @@ test('platform admin edits users and sorts and filters them by country', async (
   await User.updateOne({ _id: adminAccount.body.data.user.id }, { platformRole: 'admin' });
   const authorization = `Bearer ${adminAccount.body.data.accessToken}`;
   const adminUser = await User.findById(adminAccount.body.data.user.id);
+  const privateGarment = await request(app)
+    .post('/api/v1/garment-templates')
+    .set('Authorization', authorization)
+    .send({ name: 'Owner regional Kurta', audience: 'men', fields: [{ name: 'Length', unit: 'in' }] })
+    .expect(201);
+  expect(privateGarment.body.data.region).toBe('IN');
 
   const edited = await request(app)
     .patch(`/api/v1/admin/users/${adminUser.id}`)
@@ -1627,7 +1746,15 @@ test('platform admin edits users and sorts and filters them by country', async (
     .expect(200);
   expect(edited.body.data).toMatchObject({ name: 'Alpha User Sort Test', email: 'alpha-sort@example.test', country: 'AU', currency: 'AUD', language: 'hi' });
   const studio = await Studio.findById(adminAccount.body.data.studioId);
-  expect(studio.settings).toMatchObject({ country: 'IN', currency: 'INR' });
+  expect(studio.settings).toMatchObject({ country: 'AU', currency: 'AUD', dialCode: '+61' });
+  const currentAccount = await request(app).get('/api/v1/auth/me')
+    .set('Authorization', authorization).expect(200);
+  expect(currentAccount.body.data.studio.settings.country).toBe('AU');
+  const regionalGarments = await request(app)
+    .get('/api/v1/garment-templates?active=true')
+    .set('Authorization', authorization).expect(200);
+  expect(regionalGarments.body.data.some((row) => row.name === 'Kurta')).toBe(false);
+  expect(regionalGarments.body.data.some((row) => row.name === 'Owner regional Kurta')).toBe(false);
 
   const otherUser = await User.findById(otherAccount.body.data.user.id);
   await request(app)
@@ -1651,6 +1778,18 @@ test('platform admin edits users and sorts and filters them by country', async (
     .set('Authorization', authorization)
     .send({ version: adminUser.version, name: 'Stale update' })
     .expect(409);
+
+  // Existing accounts edited before studio region syncing need a backfill.
+  await User.updateOne(
+    { _id: otherUser.id },
+    { $set: { country: 'CA', currency: 'CAD' } },
+  );
+  const { migrateOwnerStudioRegions } = require('../src/scripts/migrate-owner-studio-regions');
+  const preview = await migrateOwnerStudioRegions();
+  expect(preview.mismatches).toContainEqual(expect.objectContaining({ from: 'IN', to: 'CA' }));
+  await migrateOwnerStudioRegions({ apply: true });
+  const updatedStudio = await Studio.findById(otherAccount.body.data.studioId);
+  expect(updatedStudio.settings).toMatchObject({ country: 'CA', currency: 'CAD' });
 });
 
 test('platform admin updates customer status and filters customers by studio country', async () => {
@@ -1930,13 +2069,13 @@ test('paid referral reward is idempotent when triggered concurrently', async () 
   expect((await Referral.findOne({ refereeStudioId: referee.body.data.studioId })).status).toBe('rewarded');
 });
 
-test('a capped new-studio subscription offer is claimed only up to its limit', async () => {
+test('a capped stronger new-studio offer is claimed only up to its limit', async () => {
   const { SubscriptionOffer, Subscription } = require('../src/models');
   const offer = await SubscriptionOffer.create({
     code: 'LAUNCH_ONE',
     title: 'Launch offer',
     active: true,
-    benefit: { type: 'trial_days', durationDays: 90, plan: 'starter' },
+    benefit: { type: 'trial_days', durationDays: 120, plan: 'studio' },
     eligibility: { audience: 'new_studios', maxRedemptions: 1 },
   });
 
@@ -1949,8 +2088,24 @@ test('a capped new-studio subscription offer is claimed only up to its limit', a
   });
   const promoted = subscriptions.filter((subscription) => subscription.entitlementSource === 'promotion');
   expect(promoted).toHaveLength(1);
+  expect(subscriptions.every((subscription) => subscription.plan === 'studio')).toBe(true);
   expect(promoted[0].promotion.code).toBe('LAUNCH_ONE');
   expect((await SubscriptionOffer.findById(offer._id)).redemptionCount).toBe(1);
+});
+
+test('a shorter or lower plan offer cannot replace the three month studio trial', async () => {
+  const { SubscriptionOffer, Subscription } = require('../src/models');
+  const offer = await SubscriptionOffer.create({
+    code: 'OLD_LAUNCH',
+    title: 'Old launch offer',
+    active: true,
+    benefit: { type: 'trial_days', durationDays: 90, plan: 'starter' },
+    eligibility: { audience: 'new_studios', maxRedemptions: 1 },
+  });
+  const account = await createAccount('+919876544104');
+  const subscription = await Subscription.findOne({ studioId: account.body.data.studioId });
+  expect(subscription).toMatchObject({ plan: 'studio', status: 'trial', entitlementSource: 'trial', seatLimit: 5 });
+  expect((await SubscriptionOffer.findById(offer._id)).redemptionCount).toBe(0);
 });
 
 test('support config is available to signed-in studios and contact support creates an admin ticket', async () => {

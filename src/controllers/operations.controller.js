@@ -1,11 +1,13 @@
 const { z } = require('zod'); const { Order, Studio, Member, Referral, ReferralRewardConfig, Customer, Notification, User, Media } = require('../models'); const { AppError, notFound } = require('../utils/errors'); const { serialize, serializePopulated } = require('./order.controller'); const { activeReferralConfig, expireReferrals, rewardReferralForStudio } = require('../services/subscription-lifecycle.service'); const { provisionStarterGarments } = require('../services/garment-catalog.service');
 const workflowNotifications = require('../services/workflow-notifications.service');
 const { rescheduleStudioOrderReminders } = require('../services/reminder-jobs.service');
+const { normalizeRegionalPhone, studioCountry } = require('../utils/regional-phone');
+const { regions } = require('../utils/region-profile');
 async function recordPayment(req, res) { const body = z.object({ orderId: z.string(), amountPaise: z.number().int().positive(), direction: z.enum(['collection', 'refund']).default('collection'), method: z.enum(['cash', 'upi', 'card', 'bank']), note: z.string().max(500).optional() }).parse(req.body); const order = await Order.findOne({ _id: body.orderId, studioId: req.auth.studio._id, deletedAt: null }); if (!order) throw notFound('Order'); if (body.direction === 'refund' && req.auth.member.role !== 'owner') throw new AppError(403, 'FORBIDDEN', 'Only an owner can record a refund.'); const paid = order.payments.reduce((sum, p) => sum + (p.direction === 'collection' ? p.amountPaise : -p.amountPaise), 0); if (body.direction === 'collection' && body.amountPaise > order.totalPaise - paid) throw new AppError(422, 'PAYMENT_EXCEEDS_BALANCE', 'A collection cannot exceed the current balance.'); order.payments.push({ amountPaise: body.amountPaise, direction: body.direction, method: body.method, noteType: body.direction === 'refund' ? 'refund' : body.amountPaise === order.totalPaise - paid ? 'full' : 'partial', note: body.note, recordedBy: req.auth.user._id }); order.activity.push({ type: 'payment_recorded', actorId: req.auth.user._id, note: body.note }); await order.save(); workflowNotifications.paymentRecorded(order, body.amountPaise, body.direction, req.auth.user._id); res.status(201).json({ data: await serializePopulated(order) }); }
 async function duePayments(req, res) { const rows = await Order.find({ studioId: req.auth.studio._id, status: { $ne: 'cancelled' }, deletedAt: null }).populate('customerId', 'name phone').sort({ deliveryDate: 1 }); const due = rows.map(serialize).filter((x) => x.outstandingPaise > 0); res.json({ data: due }); }
 async function studio(req, res) { res.json({ data: req.auth.studio }); }
 async function updateStudio(req, res) {
-  const phoneSchema = z.string().trim().transform((value) => value.replace(/\s|-/g, '')).refine((value) => /^\+?[1-9]\d{9,14}$/.test(value), 'Use a valid mobile number.').transform((value) => value.startsWith('+') ? value : `+91${value}`);
+  const phoneSchema = z.string().trim().min(1);
   const body = z.object({
     name: z.string().trim().min(2).max(100).optional(),
     ownerName: z.string().trim().min(2).max(100).optional(),
@@ -15,9 +17,16 @@ async function updateStudio(req, res) {
     services: z.array(z.enum(['mens_wear', 'womens_wear', 'kids_wear', 'alteration', 'blouse_stitching', 'uniforms', 'saree_stitching', 'other'])).max(8).optional(),
     logoMediaId: z.string().regex(/^[a-f\d]{24}$/i).nullable().optional(),
     invoicePrefix: z.string().regex(/^[A-Za-z0-9-]{1,10}$/).optional(),
-    settings: z.object({ measurementUnit: z.enum(['in', 'cm']).optional(), precision: z.enum(['whole', 'half', 'quarter']).optional(), language: z.string().max(10).optional(), currency: z.literal('INR').optional(), garmentAudiences: z.array(z.enum(['men', 'women', 'kids', 'unisex'])).min(1).max(4).optional(), deliveryDays: z.number().int().min(0).max(365).optional(), trialDays: z.number().int().min(0).max(365).optional(), skipSundays: z.boolean().optional(), notifications: z.object({ delivery: z.boolean().optional(), trial: z.boolean().optional() }).optional(), invoice: z.object({ footer: z.string().max(500).optional(), showGst: z.boolean().optional(), showMeasurements: z.boolean().optional() }).optional() }).partial().optional(),
+    settings: z.object({ measurementUnit: z.enum(['in', 'cm']).optional(), precision: z.enum(['whole', 'half', 'quarter']).optional(), language: z.string().max(10).optional(), currency: z.enum(['INR', 'USD', 'CAD', 'GBP', 'AUD']).optional(), garmentAudiences: z.array(z.enum(['men', 'women', 'kids', 'unisex'])).min(1).max(4).optional(), deliveryDays: z.number().int().min(0).max(365).optional(), trialDays: z.number().int().min(0).max(365).optional(), skipSundays: z.boolean().optional(), notifications: z.object({ delivery: z.boolean().optional(), trial: z.boolean().optional() }).optional(), invoice: z.object({ footer: z.string().max(500).optional(), showGst: z.boolean().optional(), showMeasurements: z.boolean().optional() }).optional() }).partial().optional(),
   }).parse(req.body);
-  const { ownerName, ownerPhone, ...update } = body;
+  const expectedCurrency = regions[studioCountry(req)].currency;
+  if (body.settings?.currency && body.settings.currency !== expectedCurrency) {
+    throw new AppError(422, 'CURRENCY_MISMATCH', `Use ${expectedCurrency} for this studio.`);
+  }
+  const { ownerName, ownerPhone: rawOwnerPhone, ...update } = body;
+  const ownerPhone = rawOwnerPhone
+    ? normalizeRegionalPhone(rawOwnerPhone, studioCountry(req))
+    : undefined;
   if (body.logoMediaId) {
     const logo = await Media.findOne({ _id: body.logoMediaId, studioId: req.auth.studio._id, purpose: 'studio_logo', status: 'ready' });
     if (!logo) throw new AppError(422, 'INVALID_STUDIO_LOGO', 'The selected studio logo is not ready.');
@@ -62,16 +71,24 @@ async function dashboard(req, res) {
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
   const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const dayEnd = new Date(dayStart.getTime() + 86400000);
-  const rows = await Order.find({ studioId: req.auth.studio._id, deletedAt: null })
-    .populate('customerId', 'name phone');
-  const notificationCount = await Notification.countDocuments({ userId: req.auth.user._id, readAt: null });
+  const [rows, notificationCount] = await Promise.all([
+    Order.find({ studioId: req.auth.studio._id, deletedAt: null })
+      .populate('customerId', 'name phone'),
+    Notification.countDocuments({ userId: req.auth.user._id, readAt: null }),
+  ]);
   const serialized = rows.map(serialize);
   const active = serialized.filter((order) => !['delivered', 'cancelled'].includes(order.status));
-  const collections = rows.flatMap((order) => order.payments)
-    .filter((payment) => payment.direction === 'collection');
-  const sumCollections = (from, to) => collections
-    .filter((payment) => payment.recordedAt >= from && payment.recordedAt < to)
-    .reduce((sum, payment) => sum + payment.amountPaise, 0);
+  let todayCollectedPaise = 0;
+  let monthCollectedPaise = 0;
+  const statusCounts = {};
+  for (const order of rows) {
+    statusCounts[order.status] = (statusCounts[order.status] || 0) + 1;
+    for (const payment of order.payments) {
+      if (payment.direction !== 'collection' || payment.recordedAt >= dayEnd) continue;
+      if (payment.recordedAt >= monthStart) monthCollectedPaise += payment.amountPaise;
+      if (payment.recordedAt >= dayStart) todayCollectedPaise += payment.amountPaise;
+    }
+  }
   const pendingPaise = active.reduce((sum, order) => sum + Math.max(0, order.outstandingPaise), 0);
   const overduePaise = active
     .filter((order) => new Date(order.deliveryDate) < dayStart)
@@ -88,10 +105,6 @@ async function dashboard(req, res) {
     .filter((order) => new Date(order.deliveryDate) <= now || order.outstandingPaise > 0)
     .sort((a, b) => new Date(a.deliveryDate) - new Date(b.deliveryDate))
     .slice(0, 10);
-  const statusCounts = rows.reduce(
-    (map, order) => ({ ...map, [order.status]: (map[order.status] || 0) + 1 }),
-    {},
-  );
   const inProgressStatuses = ['measurements_pending', 'cutting', 'stitching', 'trial', 'alteration'];
   res.json({
     data: {
@@ -99,9 +112,9 @@ async function dashboard(req, res) {
       studioName: req.auth.studio.name,
       role: req.auth.member.role,
       notificationCount,
-      todayCollectedPaise: sumCollections(dayStart, dayEnd),
-      monthCollectedPaise: sumCollections(monthStart, dayEnd),
-      collectedPaise: sumCollections(monthStart, dayEnd),
+      todayCollectedPaise,
+      monthCollectedPaise,
+      collectedPaise: monthCollectedPaise,
       pendingPaise,
       overduePaise,
       statusCounts,

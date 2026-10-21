@@ -9,13 +9,27 @@ const exportInput = z.object({
   format: z.enum(["pdf", "xlsx", "csv"]),
 });
 
-const shortDate = (value) => new Date(value).toLocaleDateString("en-IN", {
-  day: "2-digit", month: "short", year: "numeric", timeZone: "Asia/Kolkata",
-});
-const dateTime = (value) => new Date(value).toLocaleString("en-IN", {
-  dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Kolkata",
-});
-const money = (paise) => `Rs ${((Number(paise) || 0) / 100).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const { regions } = require("../utils/region-profile");
+const regionFor = (meta) => regions[meta.country] || regions.IN;
+const shortDateFor = (value, meta) => new Date(value).toLocaleDateString(
+  meta.locale || regionFor(meta).locale,
+  { day: "2-digit", month: "short", year: "numeric", timeZone: meta.timezone || regionFor(meta).timezone },
+);
+const dateTimeFor = (value, meta) => new Date(value).toLocaleString(
+  meta.locale || regionFor(meta).locale,
+  { dateStyle: "medium", timeStyle: "short", timeZone: meta.timezone || regionFor(meta).timezone },
+);
+const moneyFor = (paise, meta) => `${meta.currency || regionFor(meta).currency} ${((Number(paise) || 0) / 100).toLocaleString(meta.locale || regionFor(meta).locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const excelMoneyFormat = (meta) => `"${meta.currency || regionFor(meta).currency}" #,##0.00`;
+function excelDateFor(value, meta) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: meta.timezone || regionFor(meta).timezone,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date(value));
+  const fields = Object.fromEntries(parts.map((part) => [part.type, Number(part.value)]));
+  return new Date(Date.UTC(fields.year, fields.month - 1, fields.day, fields.hour, fields.minute, fields.second));
+}
 const fileDate = (value) => new Date(value).toISOString().slice(0, 10);
 const safeFilePart = (value) => String(value || "studio").replace(/[^a-z0-9-]+/gi, "-").replace(/^-|-$/g, "").toLowerCase();
 
@@ -23,7 +37,10 @@ function reportMeta(auth, input) {
   return {
     studioName: auth.studio.name || "Tailo360 Studio",
     address: auth.studio.address || "",
+    country: auth.studio.settings?.country || auth.user.country || "IN",
     currency: auth.studio.settings?.currency || "INR",
+    locale: auth.studio.settings?.locale,
+    timezone: auth.studio.settings?.timezone,
     from: input.from,
     to: input.to,
     generatedAt: new Date(),
@@ -38,6 +55,10 @@ function topGarments(report) {
 }
 
 function pdfFor(report, meta) {
+  const shortDate = (value) => shortDateFor(value, meta);
+  const dateTime = (value) => dateTimeFor(value, meta);
+  const money = (paise) => moneyFor(paise, meta);
+
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: "A4", margin: 42, bufferPages: true, info: { Title: `${meta.studioName} Business Report` } });
     const chunks = [];
@@ -159,6 +180,9 @@ function styleSheet(sheet, widths) {
 }
 
 async function xlsxFor(report, meta) {
+  const shortDate = (value) => shortDateFor(value, meta);
+  const dateTime = (value) => dateTimeFor(value, meta);
+
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Tailo360"; workbook.created = meta.generatedAt;
   const summary = workbook.addWorksheet("Executive Summary");
@@ -169,32 +193,32 @@ async function xlsxFor(report, meta) {
   summary.getColumn(1).width = 28; summary.getColumn(2).width = 34;
   summary.getRow(1).font = { bold: true, size: 16, color: { argb: "FF5536E8" } };
   summary.getRow(6).font = { bold: true, color: { argb: "FFFFFFFF" } }; summary.getRow(6).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF5536E8" } };
-  [7, 8, 9, 10, 11, 13].forEach((row) => { summary.getCell(row, 2).numFmt = '[$Rs-en-IN] #,##0.00'; });
+  [7, 8, 9, 10, 11, 13].forEach((row) => { summary.getCell(row, 2).numFmt = excelMoneyFormat(meta); });
   [14, 17, 18].forEach((row) => { summary.getCell(row, 2).numFmt = "0.0%"; });
 
   const orders = workbook.addWorksheet("Orders");
   orders.addRow(["Order", "Customer", "Phone", "Order date", "Delivery date", "Status", "Garments", "Total", "Paid", "Outstanding"]);
-  (report.orderRows || []).forEach((order) => orders.addRow([order.code, order.customerId?.name || "Customer", order.customerId?.phone || "", new Date(order.createdAt), new Date(order.deliveryDate), order.status, (order.lines || []).map((line) => `${line.quantity} ${line.name}`).join(", "), order.totalPaise / 100, order.paidPaise / 100, order.outstandingPaise / 100]));
+  (report.orderRows || []).forEach((order) => orders.addRow([order.code, order.customerId?.name || "Customer", order.customerId?.phone || "", excelDateFor(order.createdAt, meta), excelDateFor(order.deliveryDate, meta), order.status, (order.lines || []).map((line) => `${line.quantity} ${line.name}`).join(", "), order.totalPaise / 100, order.paidPaise / 100, order.outstandingPaise / 100]));
   orders.addRow(["TOTAL", "", "", "", "", "", "", { formula: `SUM(H2:H${Math.max(2, orders.rowCount)})` }, { formula: `SUM(I2:I${Math.max(2, orders.rowCount)})` }, { formula: `SUM(J2:J${Math.max(2, orders.rowCount)})` }]);
   styleSheet(orders, [16, 24, 17, 15, 15, 20, 38, 15, 15, 15]);
-  [8, 9, 10].forEach((column) => { orders.getColumn(column).numFmt = '[$Rs-en-IN] #,##0.00'; });
+  [8, 9, 10].forEach((column) => { orders.getColumn(column).numFmt = excelMoneyFormat(meta); });
   [4, 5].forEach((column) => { orders.getColumn(column).numFmt = "dd mmm yyyy"; });
 
   const payments = workbook.addWorksheet("Payments");
   payments.addRow(["Date", "Order", "Customer", "Direction", "Method", "Amount", "Note"]);
-  (report.paymentRows || []).forEach((payment) => payments.addRow([new Date(payment.recordedAt), payment.orderCode, payment.customerName, payment.direction, payment.method, payment.amountPaise / 100, payment.note]));
+  (report.paymentRows || []).forEach((payment) => payments.addRow([excelDateFor(payment.recordedAt, meta), payment.orderCode, payment.customerName, payment.direction, payment.method, payment.amountPaise / 100, payment.note]));
   payments.addRow(["TOTAL NET", "", "", "", "", report.netRevenuePaise / 100, ""]);
-  styleSheet(payments, [20, 16, 24, 14, 14, 16, 34]); payments.getColumn(1).numFmt = "dd mmm yyyy hh:mm"; payments.getColumn(6).numFmt = '[$Rs-en-IN] #,##0.00';
+  styleSheet(payments, [20, 16, 24, 14, 14, 16, 34]); payments.getColumn(1).numFmt = "dd mmm yyyy hh:mm"; payments.getColumn(6).numFmt = excelMoneyFormat(meta);
 
   const services = workbook.addWorksheet("Services");
   services.addRow(["Garment / service", "Orders", "Pieces", "Booked sales"]);
   topGarments(report).forEach((item) => services.addRow([item.name, item.orders, item.quantity, item.revenuePaise / 100]));
-  styleSheet(services, [30, 14, 14, 20]); services.getColumn(4).numFmt = '[$Rs-en-IN] #,##0.00';
+  styleSheet(services, [30, 14, 14, 20]); services.getColumn(4).numFmt = excelMoneyFormat(meta);
 
   const trend = workbook.addWorksheet("Daily Trend");
   trend.addRow(["Date", "Orders", "Booked sales", "Net collections"]);
-  (report.daily || []).forEach((row) => trend.addRow([new Date(`${row.date}T00:00:00+05:30`), row.orders, row.bookedPaise / 100, row.collectedPaise / 100]));
-  styleSheet(trend, [16, 14, 20, 20]); trend.getColumn(1).numFmt = "dd mmm yyyy"; [3, 4].forEach((column) => { trend.getColumn(column).numFmt = '[$Rs-en-IN] #,##0.00'; });
+  (report.daily || []).forEach((row) => trend.addRow([new Date(`${row.date}T00:00:00Z`), row.orders, row.bookedPaise / 100, row.collectedPaise / 100]));
+  styleSheet(trend, [16, 14, 20, 20]); trend.getColumn(1).numFmt = "dd mmm yyyy"; [3, 4].forEach((column) => { trend.getColumn(column).numFmt = excelMoneyFormat(meta); });
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 
@@ -203,6 +227,10 @@ function csvEscape(value) {
   return /[",\r\n]/.test(string) ? `"${string.replaceAll('"', '""')}"` : string;
 }
 function csvFor(report, meta) {
+  const shortDate = (value) => shortDateFor(value, meta);
+  const dateTime = (value) => dateTimeFor(value, meta);
+  const money = (paise) => moneyFor(paise, meta);
+
   const rows = [
     ["Tailo360 Business Report"], ["Studio", meta.studioName], ["Period", `${shortDate(meta.from)} - ${shortDate(meta.to)}`], ["Generated", dateTime(meta.generatedAt)], [],
     ["SUMMARY"], ["Net collections", money(report.netRevenuePaise)], ["Booked sales", money(report.bookedSalesPaise)], ["Orders", report.orders], ["Average order", money(report.averageOrderPaise)], ["Outstanding", money(report.outstandingPaise)], ["Completion rate", `${report.completionRate}%`], [],

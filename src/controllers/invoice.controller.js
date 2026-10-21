@@ -5,14 +5,21 @@ const { nanoid } = require('nanoid');
 const { Order, Media } = require('../models');
 const r2 = require('../services/r2.service');
 const { notFound } = require('../utils/errors');
+const { regions } = require('../utils/region-profile');
 
-const money = (paise) => `Rs ${(paise / 100).toFixed(2)}`;
+const regionFor = (studio) => regions[studio.settings?.country] || regions.IN;
+const money = (paise, studio) => {
+  const region = regionFor(studio);
+  const currency = studio.settings?.currency || region.currency;
+  const locale = studio.settings?.locale || region.locale;
+  return `${currency} ${(paise / 100).toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
 const paidFor = (order) => order.payments.reduce(
   (sum, payment) => sum + (payment.direction === 'collection' ? payment.amountPaise : -payment.amountPaise),
   0,
 );
-const shortDate = (value) => new Date(value).toLocaleDateString('en-IN', {
-  day: '2-digit', month: 'short', year: 'numeric',
+const shortDate = (value, studio) => new Date(value).toLocaleDateString(studio.settings?.locale || regionFor(studio).locale, {
+  day: '2-digit', month: 'short', year: 'numeric', timeZone: studio.settings?.timezone || regionFor(studio).timezone,
 });
 
 function safeImage(doc, source, x, y, options) {
@@ -26,6 +33,8 @@ function safeImage(doc, source, x, y, options) {
 }
 
 function pdfFor(order, studio, { studioLogo, tailoLogo, owner } = {}) {
+  const formatMoney = (paise) => money(paise, studio);
+  const formatDate = (value) => shortDate(value, studio);
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 46, size: 'A4', info: { Title: `Invoice ${order.code}` } });
     const parts = [];
@@ -71,7 +80,7 @@ function pdfFor(order, studio, { studioLogo, tailoLogo, owner } = {}) {
     doc.fillColor(ink).fontSize(18)
       .text(order.code, 374, 60, { width: 175, align: 'right' });
     doc.fillColor(muted).font('Helvetica').fontSize(8.5)
-      .text(`Issued ${shortDate(new Date())}`, 394, 87, { width: 155, align: 'right' });
+      .text(`Issued ${formatDate(new Date())}`, 394, 87, { width: 155, align: 'right' });
 
     doc.moveTo(left, 120).lineTo(right, 120).lineWidth(1).strokeColor(border).stroke();
 
@@ -86,8 +95,8 @@ function pdfFor(order, studio, { studioLogo, tailoLogo, owner } = {}) {
     doc.fillColor(purple).font('Helvetica-Bold').fontSize(8)
       .text('ORDER DETAILS', 355, 156, { width: 178, align: 'right', characterSpacing: 1 });
     doc.fillColor(muted).font('Helvetica').fontSize(8.5)
-      .text(`Order date   ${shortDate(order.orderDate)}`, 355, 177, { width: 178, align: 'right' })
-      .text(`Delivery      ${shortDate(order.deliveryDate)}`, 355, 194, { width: 178, align: 'right' });
+      .text(`Order date   ${formatDate(order.orderDate)}`, 355, 177, { width: 178, align: 'right' })
+      .text(`Delivery      ${formatDate(order.deliveryDate)}`, 355, 194, { width: 178, align: 'right' });
 
     let y = 251;
     doc.roundedRect(left, y, width, 28, 6).fill(deepPurple);
@@ -110,8 +119,8 @@ function pdfFor(order, studio, { studioLogo, tailoLogo, owner } = {}) {
         .text(`Custom tailoring service${line.quantity > 1 ? 's' : ''}`, left + 12, y + 16, { width: 295 });
       doc.fillColor(ink).fontSize(9)
         .text(String(line.quantity), 365, y + 7, { width: 42, align: 'center' })
-        .text(money(line.unitPricePaise), 409, y + 7, { width: 62, align: 'right' });
-      doc.font('Helvetica-Bold').text(money(line.lineTotalPaise), 473, y + 7, { width: 64, align: 'right' });
+        .text(formatMoney(line.unitPricePaise), 409, y + 7, { width: 62, align: 'right' });
+      doc.font('Helvetica-Bold').text(formatMoney(line.lineTotalPaise), 473, y + 7, { width: 64, align: 'right' });
       y += 39;
       if (index < order.lines.length - 1) {
         doc.moveTo(left + 12, y).lineTo(right - 12, y).lineWidth(.7).strokeColor(border).stroke();
@@ -126,14 +135,14 @@ function pdfFor(order, studio, { studioLogo, tailoLogo, owner } = {}) {
     doc.moveTo(summaryX, y).lineTo(right, y).lineWidth(1).strokeColor(border).stroke();
     y += 14;
     doc.fillColor(muted).font('Helvetica').fontSize(9).text('Subtotal', summaryX, y)
-      .fillColor(ink).font('Helvetica-Bold').text(money(order.totalPaise), 430, y, { width: 119, align: 'right' });
+      .fillColor(ink).font('Helvetica-Bold').text(formatMoney(order.totalPaise), 430, y, { width: 119, align: 'right' });
     y += 22;
     doc.fillColor(muted).font('Helvetica').text('Amount paid', summaryX, y)
-      .fillColor('#16865A').font('Helvetica-Bold').text(`- ${money(paid)}`, 430, y, { width: 119, align: 'right' });
+      .fillColor('#16865A').font('Helvetica-Bold').text(`- ${formatMoney(paid)}`, 430, y, { width: 119, align: 'right' });
     y += 28;
     doc.roundedRect(summaryX - 12, y - 9, 231, 46, 8).fill('#EEEAFE');
     doc.fillColor(ink).font('Helvetica-Bold').fontSize(10).text('BALANCE DUE', summaryX, y + 7)
-      .fillColor(purple).fontSize(15).text(money(balance), 430, y + 3, { width: 107, align: 'right' });
+      .fillColor(purple).fontSize(15).text(formatMoney(balance), 430, y + 3, { width: 107, align: 'right' });
 
     const noteY = Math.min(y + 70, 686);
     if (order.notes) {
@@ -211,7 +220,7 @@ async function share(req, res) {
   const { media, buffer } = await createInvoiceFile(order, req.auth, { includeUrl: false });
   order.activity.push({ type: 'invoice_shared', actorId: req.auth.user._id, note: 'WhatsApp share text requested.' });
   await order.save();
-  res.json({ data: { phone: order.customerId.phone, mediaId: media.id, fileName: `${order.code}.pdf`, contentType: 'application/pdf', pdfBase64: buffer.toString('base64'), shareText: `Hello ${order.customerId.name}, your invoice ${order.code} is attached. Total ${money(order.totalPaise)}. Balance ${money(order.totalPaise - paidFor(order))}.` } });
+  res.json({ data: { phone: order.customerId.phone, mediaId: media.id, fileName: `${order.code}.pdf`, contentType: 'application/pdf', pdfBase64: buffer.toString('base64'), shareText: `Hello ${order.customerId.name}, your invoice ${order.code} is attached. Total ${money(order.totalPaise, req.auth.studio)}. Balance ${money(order.totalPaise - paidFor(order), req.auth.studio)}.` } });
 }
 
 module.exports = { invoice, share, pdfFor };

@@ -333,6 +333,23 @@ async function updateUser(req, res) {
   if (changes.platformRole !== undefined) user.platformRole = changes.platformRole;
   if (countryChanged) Object.assign(user, regionalProfile({ country: changes.country }));
   await user.save();
+  if (countryChanged) {
+    const studios = await Studio.find({ ownerUserId: user._id });
+    for (const studio of studios) {
+      await GarmentTemplate.updateMany(
+        { studioId: studio._id, scope: { $ne: "global" }, region: null },
+        { $set: { region: studio.settings.country || before.country || "IN" } },
+      );
+      Object.assign(studio.settings, regionalProfile({ country: changes.country }));
+      await studio.save();
+      await realtimeEvents.publish(studio._id, {
+        resource: "studio",
+        action: "updated",
+        id: studio.id,
+        data: studio,
+      });
+    }
+  }
   await auditAdmin(req, Object.keys(changes).length === 1 && changes.platformRole ? "user.platform_role_updated" : "user.updated", "user", user, before, user.toObject());
   res.json({ data: user });
 }

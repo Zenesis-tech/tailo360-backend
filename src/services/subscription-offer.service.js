@@ -2,11 +2,13 @@ const { SubscriptionOffer, SubscriptionPlan } = require('../models');
 
 /// Atomically reserves the next eligible new-studio offer. This makes a
 /// "first 1,000" cap safe even when many signups complete at the same time.
-async function claimNewStudioOffer(now = new Date()) {
+async function claimNewStudioOffer(now = new Date(), minimumDurationDays = 0) {
   const offer = await SubscriptionOffer.findOneAndUpdate(
     {
       active: true,
       'eligibility.audience': 'new_studios',
+      'benefit.plan': 'studio',
+      'benefit.durationDays': { $gt: minimumDurationDays },
       $and: [
         {
           $or: [

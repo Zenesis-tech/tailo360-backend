@@ -6,19 +6,22 @@ const { User, Studio, Member, Subscription, ReferralRewardConfig, Session, Refer
 const { provisionStarterGarments } = require('./garment-catalog.service');
 const { rewardReferralForStudio } = require('./subscription-lifecycle.service');
 const { claimNewStudioOffer } = require('./subscription-offer.service');
+const { subscriptionPlans } = require('./subscription-plan-catalog.service');
 const referralId = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ', 7);
-const starterPlanDefaults = {
-  code: 'starter',
-  name: '2 Staff',
-  description: 'Everything your studio needs, with access for 2 staff members.',
+const studioPlanDefaults = {
+  ...subscriptionPlans.find((plan) => plan.code === 'studio'),
   active: true,
-  trialDays: 14,
-  monthlyPricePaise: 4900,
-  yearlyPricePaise: 47040,
-  limits: { customers: -1, ordersPerMonth: -1, staffSeats: 2 },
-  features: ['2 staff members', 'Unlimited clients and orders', 'Measurements and reminders', 'Payments and reports'],
   storeProducts: [],
 };
+function threeMonthsAfter(start) {
+  const end = new Date(start);
+  const day = end.getUTCDate();
+  end.setUTCDate(1);
+  end.setUTCMonth(end.getUTCMonth() + 3);
+  const lastDay = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth() + 1, 0)).getUTCDate();
+  end.setUTCDate(Math.min(day, lastDay));
+  return end;
+}
 const hash = (value) => crypto.createHash('sha256').update(value).digest('hex');
 function tokenPair(user, member) {
   const tokenId = nanoid();
@@ -41,25 +44,28 @@ async function createStudioFor(user, { studioName, referralCode, garmentAudience
     },
   });
   const owner = await Member.create({ studioId: studio._id, userId: user._id, phone: user.phone || `google:${user.googleSubject}`, role: 'owner' });
-  const starter = await SubscriptionPlan.findOneAndUpdate(
-    { code: 'starter' },
-    { $setOnInsert: starterPlanDefaults },
+  const studioPlan = await SubscriptionPlan.findOneAndUpdate(
+    { code: 'studio' },
+    { $setOnInsert: studioPlanDefaults },
     { upsert: true, new: true, setDefaultsOnInsert: true },
   );
-  const claimedOffer = await claimNewStudioOffer();
+  const trialStartedAt = new Date();
+  const trialEndsAt = threeMonthsAfter(trialStartedAt);
+  const minimumDurationDays = Math.floor((trialEndsAt - trialStartedAt) / 86400000);
+  const claimedOffer = await claimNewStudioOffer(trialStartedAt, minimumDurationDays);
   const offer = claimedOffer?.offer;
-  const subscriptionPlan = claimedOffer?.plan || starter;
-  const durationDays = offer?.benefit.durationDays ?? subscriptionPlan?.trialDays ?? 14;
-  const accessEndsAt = new Date(Date.now() + durationDays * 86400000);
+  const accessEndsAt = offer
+    ? new Date(trialStartedAt.getTime() + offer.benefit.durationDays * 86400000)
+    : trialEndsAt;
   const isActiveOffer = offer?.benefit.type === 'plan_access_days';
   await Subscription.create({
     studioId: studio._id,
     status: isActiveOffer ? 'active' : 'trial',
-    plan: subscriptionPlan?.code || 'starter',
+    plan: 'studio',
     entitlementSource: offer ? 'promotion' : 'trial',
     trialEndsAt: isActiveOffer ? undefined : accessEndsAt,
     periodEndsAt: isActiveOffer ? accessEndsAt : undefined,
-    seatLimit: subscriptionPlan?.limits.staffSeats ?? 2,
+    seatLimit: studioPlan.limits.staffSeats,
     promotion: offer ? { offerId: offer._id, code: offer.code, title: offer.title, redeemedAt: new Date() } : undefined,
   });
   await provisionStarterGarments(studio._id, audiences);
@@ -85,4 +91,4 @@ async function issueSession(user, member) {
   });
   return pair;
 }
-module.exports = { hash, createStudioFor, issueSession };
+module.exports = { hash, createStudioFor, issueSession, threeMonthsAfter };

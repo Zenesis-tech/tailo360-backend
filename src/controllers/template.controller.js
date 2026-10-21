@@ -1,7 +1,7 @@
 const { z } = require("zod");
 const { nanoid } = require("nanoid");
 const { GarmentTemplate, Price, Media } = require("../models");
-const { notFound } = require("../utils/errors");
+const { AppError, notFound } = require("../utils/errors");
 const r2 = require("../services/r2.service");
 const {
   studioCountry,
@@ -216,6 +216,7 @@ async function create(req, res) {
     studioId: req.auth.studio._id,
     scope: "studio",
     ...normalize(input.parse(req.body)),
+    region: studioCountry(req.auth.studio, req.auth.user),
   });
   res.status(201).json({ data: row });
 }
@@ -255,6 +256,7 @@ async function clone(req, res) {
     _id: undefined,
     studioId: req.auth.studio._id,
     scope: "studio",
+    region: studioCountry(req.auth.studio, req.auth.user),
     garmentIconMediaId: source.garmentIconMediaId || null,
     garmentIconUrl: source.garmentIconUrl || "",
     measurementDiagramMediaId: null,
@@ -303,9 +305,13 @@ async function setPrice(req, res) {
   const body = z
     .object({
       amountPaise: z.number().int().min(0),
-      currency: z.literal("INR").default("INR"),
+      currency: z.enum(["INR", "USD", "CAD", "GBP", "AUD"]).optional(),
     })
     .parse(req.body);
+  const studioCurrency = req.auth.studio.settings?.currency || req.auth.user.currency || "INR";
+  if (body.currency && body.currency !== studioCurrency) {
+    throw new AppError(422, "CURRENCY_MISMATCH", `Use ${studioCurrency} for this studio.`);
+  }
   const template = await GarmentTemplate.findOne({
     _id: req.params.templateId,
     ...visibleToStudio(req),
@@ -318,7 +324,8 @@ async function setPrice(req, res) {
   const price = await Price.create({
     studioId: req.auth.studio._id,
     templateId: template._id,
-    ...body,
+    amountPaise: body.amountPaise,
+    currency: studioCurrency,
   });
   res.json({ data: price });
 }

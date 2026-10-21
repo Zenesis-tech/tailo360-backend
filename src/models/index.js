@@ -168,6 +168,7 @@ const customerSchema = new Schema(
   base,
 );
 customerSchema.index({ studioId: 1, phone: 1 });
+customerSchema.index({ studioId: 1, deletedAt: 1, updatedAt: -1 });
 customerSchema.index({ studioId: 1, name: "text", phone: "text" });
 const measurementSchema = new Schema(
   {
@@ -224,6 +225,9 @@ const templateSchema = new Schema(
       type: [{ type: String, enum: ["IN", "US", "CA", "GB", "AU"] }],
       default: undefined,
     },
+    // Region in which a private studio template was created. Historic orders
+    // keep their template reference when the studio later changes country.
+    region: { type: String, enum: ["IN", "US", "CA", "GB", "AU"] },
     active: { type: Boolean, default: true },
     deletedAt: { type: Date, default: null },
     garmentIconUrl: {
@@ -402,6 +406,7 @@ const orderSchema = new Schema(
 );
 orderSchema.index({ studioId: 1, code: 1 }, { unique: true });
 orderSchema.index({ studioId: 1, status: 1, deliveryDate: 1 });
+orderSchema.index({ studioId: 1, deletedAt: 1, createdAt: -1, _id: -1 });
 const subscriptionSchema = new Schema(
   {
     studioId: { type: Schema.Types.ObjectId, ref: "Studio", unique: true },

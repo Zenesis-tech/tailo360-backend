@@ -13,6 +13,8 @@
     "migrate:global-garments": "node src/scripts/migrate-global-garments.js",
     "migrate:global-regions": "node src/scripts/migrate-global-regions.js",
     "migrate:garment-regions": "node src/scripts/migrate-garment-regions.js",
+    "migrate:starter-garment-countries": "node src/scripts/migrate-starter-garment-countries.js",
+    "migrate:owner-studio-regions": "node src/scripts/migrate-owner-studio-regions.js",
     "migrate:reminders-9am": "node src/scripts/migrate-reminders-9am.js",
     "create:admin": "node src/scripts/create-platform-admin.js",
     "backup:now": "node src/scripts/backup-now.js",
