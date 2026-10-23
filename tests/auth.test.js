@@ -1940,6 +1940,45 @@ test('platform admin can upload, preview, replace, and delete a garment diagram'
   expect(updatedTemplate.measurementDiagramUrl).toBe('');
 });
 
+test('platform admin can download and delete a garment icon', async () => {
+  const verified = await createAccount('+919876543218');
+  const { User, GarmentTemplate, Media } = require('../src/models');
+  const r2 = require('../src/services/r2.service');
+  await User.updateOne(
+    { _id: verified.body.data.user.id },
+    { platformRole: 'admin' },
+  );
+  const template = await GarmentTemplate.findOne({ scope: 'global' });
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00]);
+  const uploaded = await request(app)
+    .put(`/api/v1/admin/garment-templates/${template.id}/icon`)
+    .set('Authorization', `Bearer ${verified.body.data.accessToken}`)
+    .set('Content-Type', 'image/png')
+    .set('X-File-Name', 'kurta-icon.png')
+    .send(png)
+    .expect(200);
+  const mediaId = uploaded.body.data.garmentIconMediaId;
+  r2.getObject.mockResolvedValueOnce(png);
+  const downloaded = await request(app)
+    .get(`/api/v1/admin/garment-templates/${template.id}/icon/download`)
+    .set('Authorization', `Bearer ${verified.body.data.accessToken}`)
+    .expect(200);
+  expect(downloaded.headers['content-type']).toMatch(/^image\/png/);
+  expect(downloaded.headers['content-disposition']).toBe('attachment; filename="kurta-icon.png"');
+  expect(downloaded.body).toEqual(png);
+
+  await request(app)
+    .delete(`/api/v1/admin/garment-templates/${template.id}/icon`)
+    .set('Authorization', `Bearer ${verified.body.data.accessToken}`)
+    .expect(200);
+  expect((await Media.findById(mediaId)).status).toBe('deleted');
+  expect((await GarmentTemplate.findById(template.id)).garmentIconMediaId).toBeNull();
+  await request(app)
+    .get(`/api/v1/admin/garment-templates/${template.id}/icon/download`)
+    .set('Authorization', `Bearer ${verified.body.data.accessToken}`)
+    .expect(404);
+});
+
 test('platform admin can delete unused garments but referenced garments are protected', async () => {
   const verified = await createAccount('+919876543217');
   const { User, GarmentTemplate, Price } = require('../src/models');

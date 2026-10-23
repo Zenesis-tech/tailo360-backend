@@ -371,6 +371,7 @@ router.put(
   admin.uploadTemplateIcon,
 );
 router.delete("/admin/garment-templates/:id/icon", authenticate, requirePlatformAdmin, admin.deleteTemplateIcon);
+router.get("/admin/garment-templates/:id/icon/download", authenticate, requirePlatformAdmin, admin.downloadTemplateIcon);
 router.put(
   "/admin/garment-templates/:id/fields/:fieldId/icon",
   authenticate,

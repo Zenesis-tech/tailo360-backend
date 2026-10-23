@@ -1071,6 +1071,25 @@ async function deleteTemplateIcon(req, res) {
   await publishTemplateChange(template);
   res.json({ data: (await withDiagramUrls([template]))[0] });
 }
+async function downloadTemplateIcon(req, res) {
+  const template = await GarmentTemplate.findById(req.params.id);
+  if (!template) throw notFound("Garment template");
+  const media = template.garmentIconMediaId
+    ? await Media.findOne({ _id: template.garmentIconMediaId, status: "ready" })
+    : null;
+  if (!media) throw notFound("Garment icon");
+  const body = await r2.getObject(media.objectKey);
+  if (!body) throw notFound("Garment icon");
+  const fileName = (media.originalName || "garment-icon")
+    .replace(/[^a-zA-Z0-9._-]/g, "_");
+  res.set({
+    "Content-Type": media.contentType || "application/octet-stream",
+    "Content-Disposition": `attachment; filename="${fileName}"`,
+    "Cache-Control": "private, no-store",
+    "X-Content-Type-Options": "nosniff",
+  });
+  res.send(body);
+}
 async function uploadMeasurementFieldIcon(req, res) {
   const contentType = z.enum(["image/jpeg", "image/png", "image/webp"]).parse(req.get("content-type"));
   let decodedName = req.get("x-file-name") || "measurement-field-icon";
@@ -1312,6 +1331,7 @@ module.exports = {
   completeTemplateDiagramUpload,
   deleteTemplateDiagram,
   deleteTemplateIcon,
+  downloadTemplateIcon,
   prices,
   measurements,
   members,
