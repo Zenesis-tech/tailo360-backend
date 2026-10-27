@@ -271,9 +271,12 @@ async function users(req, res) {
   const q = queryText(req.query.q);
   if (req.query.country && !SUPPORTED_GARMENT_COUNTRIES.includes(req.query.country))
     throw new AppError(422, "INVALID_COUNTRY", "Choose a supported country.");
+  if (req.query.role && !["user", "support", "admin"].includes(req.query.role))
+    throw new AppError(422, "INVALID_ROLE", "Choose a valid platform role.");
   const filter = {
     deletedAt: null,
     ...(req.query.country ? { country: req.query.country } : {}),
+    ...(req.query.role ? { platformRole: req.query.role } : {}),
     ...(q ? { $or: [{ name: q }, { phone: q }, { email: q }] } : {}),
   };
   const sortField = req.query.sortBy === "name" ? "name" : "createdAt";
@@ -286,18 +289,25 @@ async function users(req, res) {
     status: { $ne: "removed" },
   }).populate("studioId", "name");
   const byUser = new Map();
-  memberships.forEach((member) =>
-    byUser.set(member.userId.toString(), {
+  memberships.forEach((member) => {
+    const id = member.userId.toString();
+    const list = byUser.get(id) || [];
+    list.push({
       role: member.role,
       status: member.status,
       studio: member.studioId,
-    }),
-  );
+    });
+    byUser.set(id, list);
+  });
   res.json({
-    data: result.data.map((user) => ({
-      ...user.toObject(),
-      membership: byUser.get(user.id) || null,
-    })),
+    data: result.data.map((user) => {
+      const userMemberships = byUser.get(user.id) || [];
+      return {
+        ...user.toObject(),
+        membership: userMemberships[0] || null,
+        memberships: userMemberships,
+      };
+    }),
     meta: result.meta,
   });
 }
@@ -374,9 +384,16 @@ async function resetUserPassword(req, res) {
 }
 async function studios(req, res) {
   const q = queryText(req.query.q);
+  const subscriptionStatus = req.query.subscriptionStatus;
+  if (subscriptionStatus && !["trial", "active", "grace_period", "expired", "restricted", "cancelled"].includes(subscriptionStatus))
+    throw new AppError(422, "INVALID_SUBSCRIPTION_STATUS", "Choose a valid subscription status.");
+  const subscriptionStudioIds = subscriptionStatus
+    ? await Subscription.distinct("studioId", { status: subscriptionStatus })
+    : null;
   const filter = {
     ...(q ? { name: q } : {}),
     ...(req.query.country ? { "settings.country": req.query.country } : {}),
+    ...(subscriptionStudioIds ? { _id: { $in: subscriptionStudioIds } } : {}),
   };
   const sortField = req.query.sortBy === "name" ? "name" : "createdAt";
   const direction = req.query.sortOrder === "asc" ? 1 : -1;
@@ -385,16 +402,18 @@ async function studios(req, res) {
     filter,
     { [sortField]: direction, _id: direction },
     req,
-    undefined,
+    { path: "ownerUserId", select: "name email phone country" },
     sortField === "name" ? { locale: "en", strength: 2 } : undefined,
   );
   const ids = result.data.map((studio) => studio._id);
-  const [subs, counts] = await Promise.all([
+  const [subs, counts, owners] = await Promise.all([
     Subscription.find({ studioId: { $in: ids } }),
     Member.aggregate([
       { $match: { studioId: { $in: ids }, status: { $ne: "removed" } } },
       { $group: { _id: "$studioId", count: { $sum: 1 } } },
     ]),
+    Member.find({ studioId: { $in: ids }, role: "owner", status: { $ne: "removed" } })
+      .populate("userId", "name email phone country"),
   ]);
   const bySub = new Map(
     subs.map((subscription) => [
@@ -403,9 +422,14 @@ async function studios(req, res) {
     ]),
   );
   const byCount = new Map(counts.map((row) => [row._id.toString(), row.count]));
+  const ownerByStudio = new Map(owners.map((member) => [
+    member.studioId.toString(),
+    member.userId || { name: member.name, phone: member.phone },
+  ]));
   res.json({
     data: result.data.map((studio) => ({
       ...studio.toObject(),
+      owner: studio.ownerUserId || ownerByStudio.get(studio.id) || null,
       subscription: bySub.get(studio.id) || null,
       memberCount: byCount.get(studio.id) || 0,
     })),
@@ -413,7 +437,7 @@ async function studios(req, res) {
   });
 }
 async function studio(req, res) {
-  const row = await Studio.findById(req.params.id);
+  const row = await Studio.findById(req.params.id).populate("ownerUserId", "name email phone country");
   if (!row) throw notFound("Studio");
   const [subscription, members, orders, customers] = await Promise.all([
     Subscription.findOne({ studioId: row._id }),
