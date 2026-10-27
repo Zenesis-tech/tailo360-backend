@@ -44,6 +44,7 @@ async function publishTemplateChange(template, action = "updated") {
 const { auditAdmin } = require("../services/audit.service");
 const { send: sendNotification } = require("../services/notification.service");
 const { escapedSearch } = require("../utils/search");
+const { retentionCutoff } = require("../utils/record-retention");
 const r2 = require("../services/r2.service");
 const env = require("../config/env");
 const { SUPPORTED_GARMENT_COUNTRIES, visibleTemplateFilter, globalTemplateCountryFilter, studioCountry } = require("../services/garment-region.service");
@@ -1292,7 +1293,7 @@ async function members(req, res) {
   res.json({ data, meta: result.meta });
 }
 async function sessions(req, res) {
-  const result = await list(Session, {}, { createdAt: -1 }, req, {
+  const result = await list(Session, { createdAt: { $gte: retentionCutoff() } }, { createdAt: -1 }, req, {
     path: "userId",
     select: "name email phone platformRole",
   });
@@ -1392,7 +1393,12 @@ async function updateConfig(req, res) {
   res.json({ data: row });
 }
 async function notifications(req, res) {
-  const filter = {};
+  const cutoff = retentionCutoff();
+  const filter = { $or: [
+    { createdAt: { $gte: cutoff } },
+    { sentAt: { $gte: cutoff } },
+    { status: { $ne: "queued" }, sentAt: null, scheduledFor: { $gte: cutoff } },
+  ] };
   if (req.query.status) filter.status = req.query.status;
   if (req.query.source) filter.source = req.query.source;
   if (req.query.type) filter.type = req.query.type;

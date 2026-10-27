@@ -986,6 +986,71 @@ test('notification history tracks unread state and supports admin targeting', as
   expect(count.body.data.count).toBe(0);
 });
 
+test('admin history keeps 30 days while active sessions and future reminders survive', async () => {
+  const account = await createAccount('+919876543237');
+  const { User, Session, Notification } = require('../src/models');
+  const { purgeOldRecords } = require('../src/services/record-retention.service');
+  const { retentionCutoff } = require('../src/utils/record-retention');
+  await User.updateOne({ _id: account.body.data.user.id }, { platformRole: 'admin' });
+  const now = new Date();
+  const old = new Date(now.getTime() - 45 * 86400000);
+  const authorization = `Bearer ${account.body.data.accessToken}`;
+  const activeSession = await Session.findOne({ tokenId: account.body.data.tokenId });
+  expect(activeSession.expiresAt.getTime()).toBeGreaterThan(now.getTime() + 364 * 86400000);
+  await Session.collection.updateOne({ _id: activeSession._id }, { $set: { createdAt: old } });
+  await request(app).post('/api/v1/auth/refresh')
+    .send({ refreshToken: account.body.data.refreshToken }).expect(200);
+  const oldSession = await Session.create({
+    userId: account.body.data.user.id,
+    tokenId: 'retention-old-session',
+    expiresAt: new Date(now.getTime() + 90 * 86400000),
+  });
+  await Session.collection.updateOne({ _id: oldSession._id }, { $set: { createdAt: old } });
+  const oldNotification = await Notification.create({
+    studioId: account.body.data.studioId,
+    userId: account.body.data.user.id,
+    type: 'retention_test', source: 'system', title: 'Old', status: 'sent', sentAt: old,
+  });
+  const recentDelivery = await Notification.create({
+    studioId: account.body.data.studioId,
+    userId: account.body.data.user.id,
+    type: 'retention_test', source: 'system', title: 'Delivered recently', status: 'sent', sentAt: now,
+  });
+  const futureReminder = await Notification.create({
+    studioId: account.body.data.studioId,
+    userId: account.body.data.user.id,
+    type: 'retention_test', source: 'system', title: 'Future reminder', status: 'queued',
+    scheduledFor: new Date(now.getTime() + 45 * 86400000),
+  });
+  const abandonedQueue = await Notification.create({
+    studioId: account.body.data.studioId,
+    userId: account.body.data.user.id,
+    type: 'retention_test', source: 'system', title: 'Abandoned queue', status: 'queued',
+  });
+  await Notification.collection.updateMany(
+    { _id: { $in: [oldNotification._id, recentDelivery._id, futureReminder._id, abandonedQueue._id] } },
+    { $set: { createdAt: old } },
+  );
+
+  const sessionHistory = await request(app).get('/api/v1/admin/sessions')
+    .set('Authorization', authorization).expect(200);
+  expect(sessionHistory.body.meta.total).toBe(await Session.countDocuments({ createdAt: { $gte: retentionCutoff() } }));
+  const notificationHistory = await request(app)
+    .get('/api/v1/admin/notifications?type=retention_test')
+    .set('Authorization', authorization).expect(200);
+  expect(notificationHistory.body.data.map((row) => row._id)).toEqual([String(recentDelivery._id)]);
+
+  const removed = await purgeOldRecords(now);
+  expect(removed.sessions).toBeGreaterThanOrEqual(1);
+  expect(removed.notifications).toBeGreaterThanOrEqual(1);
+  expect(await Session.findById(activeSession._id)).toBeNull();
+  expect(await Session.findById(oldSession._id)).not.toBeNull();
+  expect(await Notification.findById(oldNotification._id)).toBeNull();
+  expect(await Notification.findById(abandonedQueue._id)).toBeNull();
+  expect(await Notification.findById(recentDelivery._id)).not.toBeNull();
+  expect(await Notification.findById(futureReminder._id)).not.toBeNull();
+});
+
 test('same-day order reminders start at 9 AM studio-local time and remain deduplicated', async () => {
   const account = await createAccount('+919876543234');
   const { Customer, Notification, Order } = require('../src/models');

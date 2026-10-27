@@ -147,6 +147,7 @@ const sessionSchema = new Schema(
   },
   base,
 );
+sessionSchema.index({ createdAt: 1 });
 const customerSchema = new Schema(
   {
     studioId: {
@@ -738,6 +739,7 @@ const notificationSchema = new Schema(
   base,
 );
 notificationSchema.index({ userId: 1, readAt: 1, createdAt: -1 });
+notificationSchema.index({ createdAt: 1 });
 notificationSchema.index(
   { studioId: 1, userId: 1, dedupeKey: 1 },
   { unique: true, partialFilterExpression: { dedupeKey: { $type: "string" } } },

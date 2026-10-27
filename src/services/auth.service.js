@@ -87,7 +87,7 @@ async function issueSession(user, member) {
   await Session.create({
     userId: user._id,
     tokenId: pair.tokenId,
-    expiresAt: decoded?.exp ? new Date(decoded.exp * 1000) : new Date(Date.now() + 30 * 86400000),
+    expiresAt: decoded?.exp ? new Date(decoded.exp * 1000) : new Date(Date.now() + 365 * 86400000),
   });
   return pair;
 }

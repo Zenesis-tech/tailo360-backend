@@ -2,10 +2,12 @@ const cron = require("node-cron");
 const { runReminders } = require("./services/reminder-jobs.service");
 const { createBackup } = require("./services/backup.service");
 const { purgeExpiredAccounts } = require("./services/account-purge.service");
+const { purgeOldRecords } = require("./services/record-retention.service");
 const env = require("./config/env");
 
 let reminderCycleRunning = false;
 let accountPurgeCycleRunning = false;
+let recordRetentionCycleRunning = false;
 let jobsStarted = false;
 
 async function runReminderCycle() {
@@ -41,6 +43,20 @@ async function runAccountPurgeCycle() {
   }
 }
 
+async function runRecordRetentionCycle() {
+  if (recordRetentionCycleRunning) return false;
+  recordRetentionCycleRunning = true;
+  try {
+    await purgeOldRecords();
+    return true;
+  } catch (error) {
+    console.error("Session and notification retention cycle failed", error);
+    return false;
+  } finally {
+    recordRetentionCycleRunning = false;
+  }
+}
+
 function startJobs() {
   if (jobsStarted) return false;
   if (!cron.validate(env.REMINDER_CRON)) {
@@ -62,8 +78,14 @@ function startJobs() {
     runAccountPurgeCycle,
     { timezone: env.ACCOUNT_PURGE_TIMEZONE },
   );
+  cron.schedule(
+    env.ACCOUNT_PURGE_CRON,
+    runRecordRetentionCycle,
+    { timezone: env.ACCOUNT_PURGE_TIMEZONE },
+  );
   // Catch deletion windows that elapsed while the API was restarting.
   void runAccountPurgeCycle();
+  void runRecordRetentionCycle();
   if (env.BACKUP_ENABLED) {
     if (!cron.validate(env.BACKUP_CRON)) throw new Error("BACKUP_CRON is invalid.");
     cron.schedule(
@@ -74,4 +96,4 @@ function startJobs() {
   }
   return true;
 }
-module.exports = { startJobs, runReminderCycle, runAccountPurgeCycle };
+module.exports = { startJobs, runReminderCycle, runAccountPurgeCycle, runRecordRetentionCycle };

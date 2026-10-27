@@ -105,6 +105,7 @@ async function deliver(notification) {
   const app = firebaseAdmin();
   if (!app || devices.length === 0) {
     notification.status = "stored";
+    notification.sentAt = new Date();
     await notification.save();
     return notification;
   }
