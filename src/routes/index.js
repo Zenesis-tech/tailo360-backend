@@ -341,6 +341,7 @@ router.post("/admin/subscriptions/:id/test-grant", authenticate, requirePlatform
 router.get("/admin/orders", authenticate, requirePlatformAdmin, admin.orders);
 router.get("/admin/orders/:id", authenticate, requirePlatformAdmin, admin.order);
 router.get("/admin/customers", authenticate, requirePlatformAdmin, admin.customers);
+router.get("/admin/customers/:id", authenticate, requirePlatformAdmin, admin.customer);
 router.patch("/admin/customers/:id", authenticate, requirePlatformAdmin, admin.updateCustomer);
 router.get("/admin/studio-options", authenticate, requirePlatformAdmin, admin.studioOptions);
 router.get("/admin/garment-templates", authenticate, requirePlatformAdmin, admin.templates);

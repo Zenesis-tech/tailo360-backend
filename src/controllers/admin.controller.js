@@ -620,12 +620,31 @@ async function grantTestSubscription(req, res) {
 }
 async function orders(req, res) {
   const filter = { deletedAt: null };
+  const q = queryText(req.query.q);
+  const due = req.query.due;
+  if (req.query.status && !["pending", "measurements_pending", "cutting", "stitching", "trial", "alteration", "ready", "delivered", "cancelled"].includes(req.query.status))
+    throw new AppError(422, "INVALID_ORDER_STATUS", "Choose a valid order status.");
+  if (due && !["overdue", "next_7_days"].includes(due))
+    throw new AppError(422, "INVALID_DUE_FILTER", "Choose a valid delivery window.");
+  if (req.query.studioId && !/^[0-9a-f]{24}$/i.test(req.query.studioId))
+    throw new AppError(422, "INVALID_STUDIO", "Choose a valid studio.");
   if (req.query.status) filter.status = req.query.status;
   if (req.query.studioId) filter.studioId = req.query.studioId;
+  if (q) {
+    const customerIds = await Customer.distinct("_id", { $or: [{ name: q }, { phone: q }] });
+    filter.$or = [{ code: q }, { customerId: { $in: customerIds } }];
+  }
+  if (due) {
+    const now = new Date();
+    filter.deliveryDate = due === "overdue"
+      ? { $lt: now }
+      : { $gte: now, $lte: new Date(now.getTime() + 7 * 86400000) };
+    filter.$and = [{ status: { $nin: ["delivered", "cancelled"] } }];
+  }
   const sortField = ["createdAt", "deliveryDate", "totalPaise", "status"].includes(req.query.sortBy) ? req.query.sortBy : "createdAt";
   const direction = req.query.sortOrder === "asc" ? 1 : -1;
   const result = await list(Order, filter, { [sortField]: direction, _id: direction }, req, [
-    { path: "studioId", select: "name" },
+    { path: "studioId", select: "name settings.currency" },
     { path: "customerId", select: "name phone" },
   ]);
   res.json(result);
@@ -633,29 +652,59 @@ async function orders(req, res) {
 async function customers(req, res) {
   const q = queryText(req.query.q);
   const country = req.query.country;
+  const studioId = req.query.studioId;
   if (country && !SUPPORTED_GARMENT_COUNTRIES.includes(country))
     throw new AppError(422, "INVALID_COUNTRY", "Choose a supported country.");
+  if (studioId && !/^[0-9a-f]{24}$/i.test(studioId))
+    throw new AppError(422, "INVALID_STUDIO", "Choose a valid studio.");
   const filter = {
     deletedAt: null,
     ...(q ? { $or: [{ name: q }, { phone: q }] } : {}),
+    ...(studioId ? { studioId } : {}),
   };
   if (country) {
     const countryFilter = country === "IN"
       ? { $or: [{ "settings.country": "IN" }, { "settings.country": { $exists: false } }] }
       : { "settings.country": country };
     const studios = await Studio.find(countryFilter).select("_id");
-    filter.studioId = { $in: studios.map((studio) => studio._id) };
+    const countryStudioIds = studios.map((studio) => studio._id);
+    filter.studioId = studioId
+      ? { $in: countryStudioIds.filter((id) => String(id) === studioId) }
+      : { $in: countryStudioIds };
   }
   if (req.query.status) {
     if (!["active", "inactive", "suspended"].includes(req.query.status))
       throw new AppError(422, "INVALID_STATUS", "Choose a valid customer status.");
     filter.status = req.query.status === "active" ? { $in: ["active", null] } : req.query.status;
   }
-  const result = await list(Customer, filter, { createdAt: -1 }, req, {
+  const sortField = req.query.sortBy === "name" ? "name" : "createdAt";
+  const direction = req.query.sortOrder === "asc" ? 1 : -1;
+  const result = await list(Customer, filter, { [sortField]: direction, _id: direction }, req, {
     path: "studioId",
     select: "name settings.country",
+  }, sortField === "name" ? { locale: "en", strength: 2 } : undefined);
+  const ids = result.data.map((customer) => customer._id);
+  const orderCounts = await Order.aggregate([
+    { $match: { customerId: { $in: ids }, deletedAt: null } },
+    { $group: { _id: "$customerId", count: { $sum: 1 }, latestAt: { $max: "$createdAt" } } },
+  ]);
+  const byCustomer = new Map(orderCounts.map((row) => [String(row._id), row]));
+  res.json({
+    data: result.data.map((customer) => ({
+      ...customer.toObject(),
+      orderCount: byCustomer.get(customer.id)?.count || 0,
+      lastOrderAt: byCustomer.get(customer.id)?.latestAt || null,
+    })),
+    meta: result.meta,
   });
-  res.json(result);
+}
+async function customer(req, res) {
+  const row = await Customer.findOne({ _id: req.params.id, deletedAt: null })
+    .populate("studioId", "name settings.country settings.currency");
+  if (!row) throw notFound("Customer");
+  const recentOrders = await Order.find({ customerId: row._id, deletedAt: null })
+    .sort({ createdAt: -1 }).limit(25).select("code status deliveryDate totalPaise createdAt");
+  res.json({ data: { customer: row, recentOrders } });
 }
 async function updateCustomer(req, res) {
   const input = z.object({ status: z.enum(["active", "inactive", "suspended"]), version: z.number().int().nonnegative() }).parse(req.body);
@@ -1177,12 +1226,33 @@ async function measurements(req, res) {
   res.json({ data, meta: result.meta });
 }
 async function members(req, res) {
+  const q = queryText(req.query.q);
+  const matchedUserIds = q
+    ? await User.distinct("_id", { $or: [{ name: q }, { email: q }, { phone: q }] })
+    : [];
+  const studioId = req.query.studioId;
+  const role = req.query.role;
+  const status = req.query.status;
+  if (studioId && !/^[0-9a-f]{24}$/i.test(studioId))
+    throw new AppError(422, "INVALID_STUDIO", "Choose a valid studio.");
+  if (role && !["owner", "master_tailor", "front_desk"].includes(role))
+    throw new AppError(422, "INVALID_MEMBER_ROLE", "Choose a valid studio role.");
+  if (status && !["active", "limited", "paused", "invited", "expired"].includes(status))
+    throw new AppError(422, "INVALID_MEMBER_STATUS", "Choose a valid member status.");
+  const sortField = req.query.sortBy === "name" ? "name" : "createdAt";
+  const direction = req.query.sortOrder === "asc" ? 1 : -1;
   const result = await list(
     Member,
-    { status: { $ne: "removed" } },
-    { createdAt: -1 },
+    {
+      status: status || { $ne: "removed" },
+      ...(studioId ? { studioId } : {}),
+      ...(role ? { role } : {}),
+      ...(q ? { $or: [{ name: q }, { phone: q }, { userId: { $in: matchedUserIds } }] } : {}),
+    },
+    { [sortField]: direction, _id: direction },
     req,
     { path: "userId", select: "name email phone platformRole" },
+    sortField === "name" ? { locale: "en", strength: 2 } : undefined,
   );
   const data = await enrichStudioRows(result.data);
   res.json({ data, meta: result.meta });
@@ -1203,7 +1273,7 @@ async function devices(req, res) {
 }
 async function order(req, res) {
   const row = await Order.findById(req.params.id)
-    .populate("studioId", "name")
+    .populate("studioId", "name settings.currency")
     .populate("customerId", "name phone");
   if (!row || row.deletedAt) throw notFound("Order");
   res.json({ data: row });
@@ -1342,6 +1412,7 @@ module.exports = {
   orders,
   order,
   customers,
+  customer,
   updateCustomer,
   studioOptions,
   templates,

@@ -1805,15 +1805,32 @@ test('platform admin edits users and filters them by country and role while seei
 test('platform admin updates customer status and filters customers by studio country', async () => {
   const indian = await createAccount('+919876543298');
   const australian = await createAccount('+61412345298', { country: 'AU', timezone: 'Australia/Sydney', locale: 'en-AU' });
-  const { User, Customer } = require('../src/models');
+  const { User, Customer, Order } = require('../src/models');
   await User.updateOne({ _id: indian.body.data.user.id }, { platformRole: 'admin' });
   const authorization = `Bearer ${indian.body.data.accessToken}`;
-  const indianCustomer = await Customer.create({ studioId: indian.body.data.studioId, name: 'India client', phone: '+919000000298' });
-  const australianCustomer = await Customer.create({ studioId: australian.body.data.studioId, name: 'Australia client', phone: '+61400000298' });
+  const indianCustomer = await Customer.create({ studioId: indian.body.data.studioId, name: 'India AdminClient298', phone: '+919000000298' });
+  const australianCustomer = await Customer.create({ studioId: australian.body.data.studioId, name: 'Australia AdminClient298', phone: '+61400000298' });
+  await Order.create({ studioId: australian.body.data.studioId, customerId: australianCustomer._id, code: 'CUSTOMER-298', deliveryDate: new Date(Date.now() + 2 * 86400000), totalPaise: 35000 });
 
   const filtered = await request(app).get('/api/v1/admin/customers?country=AU').set('Authorization', authorization).expect(200);
   expect(filtered.body.data.some((row) => row._id === australianCustomer.id)).toBe(true);
   expect(filtered.body.data.some((row) => row._id === indianCustomer.id)).toBe(false);
+  const studioCustomers = await request(app).get('/api/v1/admin/customers')
+    .query({ studioId: australian.body.data.studioId, q: 'AdminClient298' })
+    .set('Authorization', authorization).expect(200);
+  expect(studioCustomers.body.data.map((row) => row._id)).toEqual([australianCustomer.id]);
+  expect(studioCustomers.body.data[0].orderCount).toBe(1);
+  const mismatchedRegion = await request(app).get('/api/v1/admin/customers')
+    .query({ studioId: australian.body.data.studioId, country: 'IN' })
+    .set('Authorization', authorization).expect(200);
+  expect(mismatchedRegion.body.meta.total).toBe(0);
+  const profile = await request(app).get(`/api/v1/admin/customers/${australianCustomer.id}`)
+    .set('Authorization', authorization).expect(200);
+  expect(profile.body.data.recentOrders[0].code).toBe('CUSTOMER-298');
+  const sortedCustomers = await request(app).get('/api/v1/admin/customers')
+    .query({ q: 'AdminClient298', sortBy: 'name', sortOrder: 'asc' })
+    .set('Authorization', authorization).expect(200);
+  expect(sortedCustomers.body.data.map((row) => row.name)).toEqual(['Australia AdminClient298', 'India AdminClient298']);
 
   const suspended = await request(app)
     .patch(`/api/v1/admin/customers/${australianCustomer.id}`)
@@ -1863,6 +1880,59 @@ test('platform admin sorts and filters studios with owner and subscription detai
     .query({ q: 'Sort Garment Test', sortBy: 'name', sortOrder: 'asc' })
     .set('Authorization', authorization).expect(200);
   expect(templates.body.data.map((template) => template.name)).toEqual(['Alpha Sort Garment Test', 'zebra Sort Garment Test']);
+});
+
+test('platform admin finds studio members by name, studio, role, and status', async () => {
+  const account = await createAccount('+919876543298');
+  const { User, Member } = require('../src/models');
+  await User.updateOne({ _id: account.body.data.user.id }, { platformRole: 'admin', name: 'Nina Owner Match' });
+  const authorization = `Bearer ${account.body.data.accessToken}`;
+  await Member.create({
+    studioId: account.body.data.studioId,
+    name: 'Mira Front Desk',
+    phone: '+919876543293',
+    role: 'front_desk',
+    status: 'invited',
+  });
+  const response = await request(app).get('/api/v1/admin/members')
+    .query({ q: 'Mira', studioId: account.body.data.studioId, role: 'front_desk', status: 'invited' })
+    .set('Authorization', authorization).expect(200);
+  expect(response.body.meta.total).toBe(1);
+  expect(response.body.data[0]).toMatchObject({ name: 'Mira Front Desk', role: 'front_desk', status: 'invited' });
+  expect(response.body.data[0].studio.name).toBeTruthy();
+  const ownerSearch = await request(app).get('/api/v1/admin/members')
+    .query({ q: 'Nina Owner Match', role: 'owner' })
+    .set('Authorization', authorization).expect(200);
+  expect(ownerSearch.body.data.some((member) => member.userId?.name === 'Nina Owner Match')).toBe(true);
+  await request(app).get('/api/v1/admin/members')
+    .query({ role: 'admin' })
+    .set('Authorization', authorization).expect(422);
+});
+
+test('platform admin searches orders and filters delivery windows', async () => {
+  const account = await createAccount('+919876543292');
+  const { User, Customer, Order } = require('../src/models');
+  await User.updateOne({ _id: account.body.data.user.id }, { platformRole: 'admin' });
+  const authorization = `Bearer ${account.body.data.accessToken}`;
+  const customer = await Customer.create({ studioId: account.body.data.studioId, name: 'Maya Order Search', phone: '+919000000292' });
+  const base = { studioId: account.body.data.studioId, customerId: customer._id, totalPaise: 12000, lines: [{ name: 'Jacket', quantity: 1, lineTotalPaise: 12000 }] };
+  const overdue = await Order.create({ ...base, code: 'ADM-OVERDUE-292', status: 'stitching', deliveryDate: new Date(Date.now() - 2 * 86400000) });
+  await Order.create({ ...base, code: 'ADM-UPCOMING-292', status: 'ready', deliveryDate: new Date(Date.now() + 2 * 86400000) });
+  await Order.create({ ...base, code: 'ADM-DONE-292', status: 'delivered', deliveryDate: new Date(Date.now() - 3 * 86400000) });
+  const search = await request(app).get('/api/v1/admin/orders')
+    .query({ q: 'Maya Order Search', studioId: account.body.data.studioId, due: 'overdue' })
+    .set('Authorization', authorization).expect(200);
+  expect(search.body.data.map((order) => order.code)).toEqual(['ADM-OVERDUE-292']);
+  expect(search.body.data[0].studioId.settings.currency).toBe('INR');
+  const upcoming = await request(app).get('/api/v1/admin/orders')
+    .query({ q: 'ADM-UPCOMING-292', due: 'next_7_days' })
+    .set('Authorization', authorization).expect(200);
+  expect(upcoming.body.meta.total).toBe(1);
+  const detail = await request(app).get(`/api/v1/admin/orders/${overdue.id}`)
+    .set('Authorization', authorization).expect(200);
+  expect(detail.body.data.lines[0].name).toBe('Jacket');
+  await request(app).get('/api/v1/admin/orders').query({ due: 'invalid' })
+    .set('Authorization', authorization).expect(422);
 });
 
 test('platform admin can grant expiring test access without a store product', async () => {
