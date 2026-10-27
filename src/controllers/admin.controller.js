@@ -46,7 +46,7 @@ const { send: sendNotification } = require("../services/notification.service");
 const { escapedSearch } = require("../utils/search");
 const r2 = require("../services/r2.service");
 const env = require("../config/env");
-const { SUPPORTED_GARMENT_COUNTRIES, visibleTemplateFilter, studioCountry } = require("../services/garment-region.service");
+const { SUPPORTED_GARMENT_COUNTRIES, visibleTemplateFilter, globalTemplateCountryFilter, studioCountry } = require("../services/garment-region.service");
 const { regionalProfile } = require("../utils/region-profile");
 const diagramUrl = z
   .string()
@@ -472,7 +472,9 @@ async function subscriptions(req, res) {
     throw new AppError(422, "INVALID_SUBSCRIPTION_SOURCE", "Choose a valid subscription source.");
   if (req.query.status) filter.status = req.query.status;
   if (req.query.plan) filter.plan = req.query.plan;
-  if (req.query.source) filter.entitlementSource = req.query.source;
+  if (req.query.source === "trial")
+    filter.$or = [{ entitlementSource: "trial" }, { entitlementSource: { $exists: false }, status: "trial" }];
+  else if (req.query.source) filter.entitlementSource = req.query.source;
   if (req.query.country) filter.country = req.query.country;
   if (req.query.currency) filter.currency = req.query.currency;
   if (q) {
@@ -790,6 +792,9 @@ async function withDiagramUrls(rows) {
 async function templates(req, res) {
   const q = queryText(req.query.q);
   const filter = q ? { name: q } : {};
+  const constraints = [];
+  if (req.query.country && !SUPPORTED_GARMENT_COUNTRIES.includes(req.query.country))
+    throw new AppError(422, "INVALID_COUNTRY", "Choose a supported country.");
   if (req.query.scope && !["global", "studio"].includes(req.query.scope))
     throw new AppError(422, "INVALID_TEMPLATE_SCOPE", "Choose global or studio templates.");
   if (req.query.audience && !["men", "women", "kids", "unisex"].includes(req.query.audience))
@@ -800,8 +805,16 @@ async function templates(req, res) {
   else if (req.query.studioId) {
     const studio = await Studio.findById(req.query.studioId);
     if (!studio) throw notFound("Studio");
-    Object.assign(filter, visibleTemplateFilter(studio._id, studioCountry(studio)));
+    constraints.push(visibleTemplateFilter(studio._id, studioCountry(studio)));
   }
+  if (req.query.country) {
+    const studioCountryFilter = req.query.country === "IN"
+      ? { $or: [{ "settings.country": "IN" }, { "settings.country": { $exists: false } }] }
+      : { "settings.country": req.query.country };
+    const studioIds = await Studio.distinct("_id", studioCountryFilter);
+    constraints.push({ $or: [globalTemplateCountryFilter(req.query.country), { scope: "studio", studioId: { $in: studioIds } }] });
+  }
+  if (constraints.length) filter.$and = constraints;
   if (req.query.scope) filter.scope = req.query.scope;
   if (req.query.audience) filter.audience = req.query.audience;
   if (req.query.active) filter.active = req.query.active === "true";

@@ -1424,6 +1424,29 @@ test('platform garment templates and measurements are managed by studio country'
   expect(matchingAdminTemplates.body.data.map((row) => row._id)).toEqual(
     expect.arrayContaining([indiaTemplate.body.data._id, australiaTemplate.body.data._id]),
   );
+  for (const [country, expectedId, excludedId] of [
+    ['IN', indiaTemplate.body.data._id, australiaTemplate.body.data._id],
+    ['AU', australiaTemplate.body.data._id, indiaTemplate.body.data._id],
+  ]) {
+    const byCountry = await request(app)
+      .get('/api/v1/admin/garment-templates')
+      .query({ q: name, country })
+      .set('Authorization', authorization)
+      .expect(200);
+    expect(byCountry.body.data.map((row) => row._id)).toContain(expectedId);
+    expect(byCountry.body.data.map((row) => row._id)).not.toContain(excludedId);
+  }
+  const visibleInIndianStudio = await request(app)
+    .get('/api/v1/admin/garment-templates')
+    .query({ q: name, country: 'IN', studioId: indian.body.data.studioId })
+    .set('Authorization', authorization)
+    .expect(200);
+  expect(visibleInIndianStudio.body.data.map((row) => row._id)).toContain(indiaTemplate.body.data._id);
+  await request(app)
+    .get('/api/v1/admin/garment-templates')
+    .query({ country: 'ZZ' })
+    .set('Authorization', authorization)
+    .expect(422);
   for (const filter of ['scope=studio', 'audience=women', 'active=false']) {
     const filtered = await request(app)
       .get(`/api/v1/admin/garment-templates?q=${encodeURIComponent(name)}&${filter}`)
@@ -1993,6 +2016,30 @@ test('platform admin can grant expiring test access without a store product', as
     Date.now() + 6 * 86400000,
   );
   expect(response.body.data.productId).toBeUndefined();
+
+  const authorization = `Bearer ${verified.body.data.accessToken}`;
+  for (const query of [
+    { q: 'Needle & Thread', status: 'active', plan: 'starter', source: 'admin_test' },
+    { q: '+919876543215', source: 'admin_test' },
+  ]) {
+    const matches = await request(app)
+      .get('/api/v1/admin/subscriptions')
+      .query(query)
+      .set('Authorization', authorization)
+      .expect(200);
+    expect(matches.body.data.some((row) => row._id === subscription.id)).toBe(true);
+  }
+  const otherSource = await request(app)
+    .get('/api/v1/admin/subscriptions')
+    .query({ q: '+919876543215', source: 'store' })
+    .set('Authorization', authorization)
+    .expect(200);
+  expect(otherSource.body.data).toEqual([]);
+  await request(app)
+    .get('/api/v1/admin/subscriptions')
+    .query({ source: 'invalid' })
+    .set('Authorization', authorization)
+    .expect(422);
 });
 
 test('platform admin can upload, preview, replace, and delete a garment diagram', async () => {
