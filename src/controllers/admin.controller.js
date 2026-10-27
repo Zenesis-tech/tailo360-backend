@@ -463,11 +463,23 @@ async function studio(req, res) {
 }
 async function subscriptions(req, res) {
   const filter = {};
+  const q = queryText(req.query.q);
+  if (req.query.status && !["trial", "active", "grace_period", "expired", "restricted", "cancelled"].includes(req.query.status))
+    throw new AppError(422, "INVALID_SUBSCRIPTION_STATUS", "Choose a valid subscription status.");
+  if (req.query.plan && !["starter", "studio"].includes(req.query.plan))
+    throw new AppError(422, "INVALID_SUBSCRIPTION_PLAN", "Choose a valid subscription plan.");
+  if (req.query.source && !["trial", "store", "admin_test", "promotion"].includes(req.query.source))
+    throw new AppError(422, "INVALID_SUBSCRIPTION_SOURCE", "Choose a valid subscription source.");
   if (req.query.status) filter.status = req.query.status;
   if (req.query.plan) filter.plan = req.query.plan;
+  if (req.query.source) filter.entitlementSource = req.query.source;
   if (req.query.country) filter.country = req.query.country;
   if (req.query.currency) filter.currency = req.query.currency;
-  if (req.query.q) filter.purchaseToken = req.query.q.trim();
+  if (q) {
+    const ownerIds = await User.distinct("_id", { $or: [{ name: q }, { phone: q }, { email: q }] });
+    const studioIds = await Studio.distinct("_id", { $or: [{ name: q }, { ownerUserId: { $in: ownerIds } }] });
+    filter.studioId = { $in: studioIds };
+  }
   const result = await list(Subscription, filter, { updatedAt: -1 }, req, {
     path: "studioId",
     select: "name address businessType services referralCode ownerUserId onboardingCompletedAt settings.country settings.currency createdAt",
@@ -778,12 +790,21 @@ async function withDiagramUrls(rows) {
 async function templates(req, res) {
   const q = queryText(req.query.q);
   const filter = q ? { name: q } : {};
+  if (req.query.scope && !["global", "studio"].includes(req.query.scope))
+    throw new AppError(422, "INVALID_TEMPLATE_SCOPE", "Choose global or studio templates.");
+  if (req.query.audience && !["men", "women", "kids", "unisex"].includes(req.query.audience))
+    throw new AppError(422, "INVALID_AUDIENCE", "Choose a valid garment audience.");
+  if (req.query.active && !["true", "false"].includes(req.query.active))
+    throw new AppError(422, "INVALID_TEMPLATE_STATE", "Choose active or inactive templates.");
   if (req.query.studioId === "global") filter.scope = "global";
   else if (req.query.studioId) {
     const studio = await Studio.findById(req.query.studioId);
     if (!studio) throw notFound("Studio");
     Object.assign(filter, visibleTemplateFilter(studio._id, studioCountry(studio)));
   }
+  if (req.query.scope) filter.scope = req.query.scope;
+  if (req.query.audience) filter.audience = req.query.audience;
+  if (req.query.active) filter.active = req.query.active === "true";
   const sortField = ["createdAt", "updatedAt", "name", "audience"].includes(req.query.sortBy) ? req.query.sortBy : "createdAt";
   const direction = req.query.sortOrder === "asc" ? 1 : -1;
   const result = await list(

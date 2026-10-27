@@ -1417,6 +1417,21 @@ test('platform garment templates and measurements are managed by studio country'
     fields: [expect.objectContaining({ name: 'Australian torso', unit: 'cm' })],
   });
 
+  const matchingAdminTemplates = await request(app)
+    .get(`/api/v1/admin/garment-templates?q=${encodeURIComponent(name)}&scope=global&audience=men&active=true`)
+    .set('Authorization', authorization)
+    .expect(200);
+  expect(matchingAdminTemplates.body.data.map((row) => row._id)).toEqual(
+    expect.arrayContaining([indiaTemplate.body.data._id, australiaTemplate.body.data._id]),
+  );
+  for (const filter of ['scope=studio', 'audience=women', 'active=false']) {
+    const filtered = await request(app)
+      .get(`/api/v1/admin/garment-templates?q=${encodeURIComponent(name)}&${filter}`)
+      .set('Authorization', authorization)
+      .expect(200);
+    expect(filtered.body.data).toEqual([]);
+  }
+
   const moved = await request(app)
     .patch(`/api/v1/admin/garment-templates/${australiaTemplate.body.data._id}`)
     .set('Authorization', authorization)
