@@ -54,6 +54,7 @@ async function createStudioFor(user, { studioName, referralCode, garmentAudience
     status: isActiveOffer ? 'active' : 'trial',
     plan: 'studio',
     entitlementSource: offer ? 'promotion' : 'trial',
+    trialStartedAt: isActiveOffer ? undefined : trialStartedAt,
     trialEndsAt: isActiveOffer ? undefined : accessEndsAt,
     periodEndsAt: isActiveOffer ? accessEndsAt : undefined,
     seatLimit: studioPlan.limits.staffSeats,

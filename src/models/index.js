@@ -447,6 +447,7 @@ const subscriptionSchema = new Schema(
     priceAmountMicros: { type: Number, min: 0 },
     autoRenewing: { type: Boolean, default: false },
     cancellationReason: String,
+    trialStartedAt: Date,
     trialEndsAt: Date,
     periodEndsAt: Date,
     seatLimit: { type: Number, default: 2 },

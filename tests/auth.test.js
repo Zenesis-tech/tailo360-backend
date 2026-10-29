@@ -2170,6 +2170,44 @@ test('platform admin can grant expiring test access without a store product', as
     .expect(422);
 });
 
+test('platform admin can list, extend, and end signup trials without changing store access', async () => {
+  const verified = await createAccount('+919876543299');
+  const { User, Subscription } = require('../src/models');
+  await User.updateOne({ _id: verified.body.data.user.id }, { platformRole: 'admin' });
+  const authorization = `Bearer ${verified.body.data.accessToken}`;
+  const subscription = await Subscription.findOne({ studioId: verified.body.data.studioId });
+  const originalEnd = subscription.trialEndsAt.getTime();
+  const listed = await request(app).get('/api/v1/admin/subscriptions')
+    .query({ trials: 'true' }).set('Authorization', authorization).expect(200);
+  expect(listed.body.data.some((row) => row._id === subscription.id)).toBe(true);
+
+  const extended = await request(app).post(`/api/v1/admin/subscriptions/${subscription.id}/trial`)
+    .set('Authorization', authorization).send({ action: 'extend', days: 7, note: 'Support extension' }).expect(200);
+  expect(extended.body.data.status).toBe('trial');
+  expect(new Date(extended.body.data.trialEndsAt).getTime()).toBe(originalEnd + 7 * 86400000);
+
+  await request(app).post(`/api/v1/admin/subscriptions/${subscription.id}/trial`)
+    .set('Authorization', authorization).send({ action: 'end' }).expect(200);
+  const ended = await Subscription.findById(subscription.id);
+  expect(ended.status).toBe('expired');
+  await request(app).post(`/api/v1/admin/subscriptions/${subscription.id}/trial`)
+    .set('Authorization', authorization).send({ action: 'end' }).expect(422);
+
+  const restored = await request(app).post(`/api/v1/admin/subscriptions/${subscription.id}/trial`)
+    .set('Authorization', authorization).send({ action: 'extend', days: 3 }).expect(200);
+  expect(restored.body.data.status).toBe('trial');
+  expect(new Date(restored.body.data.trialEndsAt).getTime()).toBeGreaterThan(Date.now() + 2 * 86400000);
+
+  await Subscription.updateOne({ _id: subscription.id }, {
+    status: 'active', entitlementSource: 'store', platform: 'google', productId: 'paid_plan', trialEndsAt: new Date(),
+  });
+  await request(app).post(`/api/v1/admin/subscriptions/${subscription.id}/trial`)
+    .set('Authorization', authorization).send({ action: 'extend', days: 7 }).expect(422);
+  const storeList = await request(app).get('/api/v1/admin/subscriptions')
+    .query({ trials: 'true' }).set('Authorization', authorization).expect(200);
+  expect(storeList.body.data.some((row) => row._id === subscription.id)).toBe(false);
+});
+
 test('platform admin can upload, preview, replace, and delete a garment diagram', async () => {
   const verified = await createAccount('+919876543216');
   const { User, GarmentTemplate, Media } = require('../src/models');

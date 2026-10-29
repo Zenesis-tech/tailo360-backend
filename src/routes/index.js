@@ -338,6 +338,7 @@ router.get("/admin/studios", authenticate, requirePlatformAdmin, admin.studios);
 router.get("/admin/studios/:id", authenticate, requirePlatformAdmin, admin.studio);
 router.get("/admin/subscriptions", authenticate, requirePlatformAdmin, admin.subscriptions);
 router.patch("/admin/subscriptions/:id", authenticate, requirePlatformAdmin, admin.updateSubscription);
+router.post("/admin/subscriptions/:id/trial", authenticate, requirePlatformAdmin, admin.manageTrial);
 router.post("/admin/subscriptions/:id/test-grant", authenticate, requirePlatformAdmin, admin.grantTestSubscription);
 router.get("/admin/orders", authenticate, requirePlatformAdmin, admin.orders);
 router.get("/admin/orders/:id", authenticate, requirePlatformAdmin, admin.order);

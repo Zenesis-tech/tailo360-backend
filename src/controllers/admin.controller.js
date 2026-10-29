@@ -477,6 +477,12 @@ async function subscriptions(req, res) {
   if (req.query.source === "trial")
     filter.$or = [{ entitlementSource: "trial" }, { entitlementSource: { $exists: false }, status: "trial" }];
   else if (req.query.source) filter.entitlementSource = req.query.source;
+  if (req.query.trials === "true") {
+    filter.trialEndsAt = { $exists: true, $ne: null };
+    filter.platform = { $exists: false };
+    filter.productId = { $exists: false };
+    filter.$and = [{ $or: [{ entitlementSource: "trial" }, { entitlementSource: "promotion" }, { entitlementSource: { $exists: false } }] }];
+  }
   if (req.query.country) filter.country = req.query.country;
   if (req.query.currency) filter.currency = req.query.currency;
   if (q) {
@@ -564,6 +570,49 @@ async function updateSubscription(req, res) {
     data: row,
   });
   res.json({ data: row });
+}
+async function manageTrial(req, res) {
+  const input = z.object({
+    action: z.enum(["extend", "end"]),
+    days: z.number().int().min(1).max(365).optional(),
+    note: z.string().trim().max(200).optional(),
+  }).refine((value) => value.action !== "extend" || value.days !== undefined, {
+    message: "Enter how many days to add.",
+  }).parse(req.body);
+  const subscription = await Subscription.findById(req.params.id);
+  if (!subscription) throw notFound("Subscription");
+  if (!subscription.trialEndsAt || subscription.platform || subscription.productId ||
+      !["trial", "promotion", undefined].includes(subscription.entitlementSource) ||
+      !["trial", "expired"].includes(subscription.status)) {
+    throw new AppError(422, "TRIAL_NOT_MANAGEABLE", "Only a current or expired Tailo360 trial can be changed here.");
+  }
+  if (input.action === "end" && subscription.status !== "trial") {
+    throw new AppError(422, "TRIAL_ALREADY_ENDED", "This trial has already ended.");
+  }
+  const before = subscription.toObject();
+  if (input.action === "extend") {
+    subscription.trialEndsAt = new Date(Math.max(Date.now(), subscription.trialEndsAt.getTime()) + input.days * 86400000);
+    subscription.status = "trial";
+  } else {
+    subscription.trialEndsAt = new Date();
+    subscription.status = "expired";
+  }
+  await subscription.save();
+  await auditAdmin(req, `subscription.trial_${input.action === "extend" ? "extended" : "ended"}`, "subscription", subscription, before, {
+    action: input.action, days: input.days, note: input.note, trialEndsAt: subscription.trialEndsAt,
+  });
+  sendNotification(subscription.studioId, {
+    type: "subscription_updated",
+    title: input.action === "extend" ? "Trial extended" : "Trial ended",
+    body: input.action === "extend"
+      ? `Your Tailo360 trial is available until ${subscription.trialEndsAt.toLocaleDateString("en-IN")}.`
+      : "Your Tailo360 trial has ended.",
+    data: { route: "subscription" }, source: "admin", createdBy: req.auth.user._id,
+  }).catch(console.error);
+  await realtimeEvents.publish(subscription.studioId, {
+    resource: "subscription", action: "updated", id: subscription.id, data: subscription,
+  });
+  res.json({ data: subscription });
 }
 async function grantTestSubscription(req, res) {
   const input = z
@@ -1480,6 +1529,7 @@ module.exports = {
   studio,
   subscriptions,
   updateSubscription,
+  manageTrial,
   grantTestSubscription,
   orders,
   order,
