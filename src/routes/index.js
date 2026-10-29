@@ -395,6 +395,7 @@ router.get("/admin/notifications", authenticate, requirePlatformAdmin, admin.not
 router.post("/admin/notifications/send", authenticate, requirePlatformAdmin, notifications.adminSend);
 router.get("/admin/media", authenticate, requirePlatformAdmin, admin.media);
 router.get("/admin/subscription-events", authenticate, requirePlatformAdmin, admin.subscriptionEvents);
+router.post("/admin/subscription-events/:id/refresh-order", authenticate, requirePlatformAdmin, admin.refreshSubscriptionOrder);
 router.get("/admin/audit", authenticate, requirePlatformAdmin, admin.audit);
 router.get("/admin/config", authenticate, requirePlatformAdmin, admin.config);
 router.put("/admin/config", authenticate, requirePlatformAdmin, admin.updateConfig);

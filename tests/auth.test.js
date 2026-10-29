@@ -74,15 +74,7 @@ async function createAccount(phone, options = {}) {
     .expect(200);
 }
 
-test('three month trials clamp month end dates without rolling into another month', () => {
-  const { threeMonthsAfter } = require('../src/services/auth.service');
-  expect(threeMonthsAfter(new Date('2026-01-31T12:34:56.000Z')).toISOString())
-    .toBe('2026-04-30T12:34:56.000Z');
-  expect(threeMonthsAfter(new Date('2023-11-30T12:34:56.000Z')).toISOString())
-    .toBe('2024-02-29T12:34:56.000Z');
-});
-
-test('OTP provisions a studio and returns a usable token', async () => {
+test('OTP provisions a studio with the default 90-day trial and returns a usable token', async () => {
   const trialStartedAfter = Date.now();
   const verified = await createAccount('+919876543210');
   expect(verified.body.data.isNew).toBe(true);
@@ -108,6 +100,53 @@ test('OTP provisions a studio and returns a usable token', async () => {
     .set('Authorization', `Bearer ${returning.body.data.accessToken}`)
     .expect(200);
   expect(returningProfile.body.data.subscription.trialEndsAt).toBe(trialEndsAt);
+});
+
+test('admin signup trial setting applies only to newly created studios', async () => {
+  const { AppConfig, Subscription, User } = require('../src/models');
+  const admin = await createAccount('+919876543211');
+  await User.updateOne({ _id: admin.body.data.user.id }, { platformRole: 'admin' });
+  const existing = await Subscription.findOne({ studioId: admin.body.data.studioId });
+  const originalEnd = existing.trialEndsAt.getTime();
+
+  await request(app).put('/api/v1/admin/config')
+    .set('Authorization', `Bearer ${admin.body.data.accessToken}`)
+    .send({ signupTrialDays: 7 })
+    .expect(200);
+  const newcomer = await createAccount('+919876543212');
+  const newTrial = await Subscription.findOne({ studioId: newcomer.body.data.studioId });
+  expect(newTrial.trialEndsAt.getTime() - newTrial.createdAt.getTime()).toBeGreaterThan(6 * 86400000);
+  expect(newTrial.trialEndsAt.getTime() - newTrial.createdAt.getTime()).toBeLessThan(8 * 86400000);
+  expect((await Subscription.findById(existing.id)).trialEndsAt.getTime()).toBe(originalEnd);
+
+  await AppConfig.updateOne({ key: 'platform' }, { signupTrialDays: 90 });
+});
+
+test('admin can see a studio owner and refresh a verified Google order', async () => {
+  const { SubscriptionEvent, User } = require('../src/models');
+  const account = await createAccount('+919876543213');
+  await User.updateOne({ _id: account.body.data.user.id }, { platformRole: 'admin' });
+  const event = await SubscriptionEvent.create({
+    studioId: account.body.data.studioId,
+    platform: 'google',
+    transactionId: 'GPA.1234',
+    productId: 'studio-monthly',
+    raw: { latestOrderId: 'GPA.1234' },
+  });
+  const authorization = `Bearer ${account.body.data.accessToken}`;
+  const list = await request(app).get(`/api/v1/admin/subscription-events?studioId=${account.body.data.studioId}`)
+    .set('Authorization', authorization).expect(200);
+  expect(list.body.data.find((row) => row._id === event.id).studioId.ownerUserId.phone).toBe('+919876543213');
+  const lookup = jest.spyOn(require('../src/services/store-verification.service'), 'lookupGoogleOrder')
+    .mockResolvedValue({ orderState: 'PROCESSED', paidCurrency: 'INR', paidAmountMicros: 99000000 });
+  try {
+    const refreshed = await request(app).post(`/api/v1/admin/subscription-events/${event.id}/refresh-order`)
+      .set('Authorization', authorization).expect(200);
+    expect(refreshed.body.data).toMatchObject({ orderState: 'PROCESSED', paidAmountMicros: 99000000 });
+    expect(refreshed.body.data.raw).toBeUndefined();
+  } finally {
+    lookup.mockRestore();
+  }
 });
 
 test('international OTP persists an E.164 identity and regional profile', async () => {
@@ -2353,7 +2392,7 @@ test('a capped stronger new-studio offer is claimed only up to its limit', async
   expect((await SubscriptionOffer.findById(offer._id)).redemptionCount).toBe(1);
 });
 
-test('a shorter or lower plan offer cannot replace the three month studio trial', async () => {
+test('a shorter or lower plan offer cannot replace the default studio trial', async () => {
   const { SubscriptionOffer, Subscription } = require('../src/models');
   const offer = await SubscriptionOffer.create({
     code: 'OLD_LAUNCH',

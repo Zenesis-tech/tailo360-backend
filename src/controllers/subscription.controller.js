@@ -1,7 +1,7 @@
 const { z } = require('zod');
 const { Subscription, SubscriptionPlan, SubscriptionEvent, SubscriptionOffer, Member, AppConfig } = require('../models');
 const { AppError } = require('../utils/errors');
-const { verifyPurchase, planFor } = require('../services/store-verification.service');
+const { verifyPurchase, planFor, acknowledgeGoogle, lookupGoogleOrder } = require('../services/store-verification.service');
 const { rewardReferralForStudio, expireReferrals } = require('../services/subscription-lifecycle.service');
 const { auditAdmin } = require('../services/audit.service');
 const { send: sendNotification } = require('../services/notification.service');
@@ -30,8 +30,30 @@ async function validatePurchase(req, res) {
   const country = supportedCountries.includes(verified.country) ? verified.country : (req.auth.user.country || 'IN');
   const currency = body.currency || req.auth.user.currency || 'INR';
   const duplicate = await SubscriptionEvent.findOne({ platform: verified.platform, transactionId: verified.transactionId }); if (duplicate && !duplicate.studioId.equals(req.auth.studio._id)) throw new AppError(409, 'PURCHASE_ALREADY_CLAIMED', 'This purchase is linked to another studio.');
-  await SubscriptionEvent.findOneAndUpdate({ platform: verified.platform, transactionId: verified.transactionId }, { studioId: req.auth.studio._id, platform: verified.platform, transactionId: verified.transactionId, originalTransactionId: verified.originalTransactionId, productId: verified.productId, purchaseToken: verified.purchaseToken, country, currency, priceAmountMicros: body.priceAmountMicros, raw: verified.raw, verifiedAt: new Date() }, { upsert: true, new: true });
+  const tokenClaim = verified.purchaseToken && await Subscription.findOne({ purchaseToken: verified.purchaseToken }).select('studioId');
+  const eventClaim = verified.purchaseToken && await SubscriptionEvent.findOne({ platform: verified.platform, purchaseToken: verified.purchaseToken }).select('studioId');
+  if ([tokenClaim, eventClaim].some((claim) => claim && !claim.studioId.equals(req.auth.studio._id))) throw new AppError(409, 'PURCHASE_ALREADY_CLAIMED', 'This purchase is linked to another studio.');
+  await SubscriptionEvent.findOneAndUpdate({ platform: verified.platform, transactionId: verified.transactionId }, { studioId: req.auth.studio._id, platform: verified.platform, transactionId: verified.transactionId, originalTransactionId: verified.originalTransactionId, productId: verified.productId, purchaseToken: verified.purchaseToken, country, currency, priceAmountMicros: body.priceAmountMicros, status: verified.status, periodEndsAt: verified.periodEndsAt, autoRenewing: verified.autoRenewing, acknowledgementState: verified.acknowledgementState, raw: verified.raw, verifiedAt: new Date() }, { upsert: true, new: true });
   const subscription = await Subscription.findOneAndUpdate({ studioId: req.auth.studio._id }, { plan: product.code, status: verified.status, platform: verified.platform, entitlementSource: 'store', productId: verified.productId, googlePlaySubscriptionId: verified.platform === 'google' ? verified.productId : undefined, purchaseToken: verified.purchaseToken, originalTransactionId: verified.originalTransactionId, country, currency, priceAmountMicros: body.priceAmountMicros, autoRenewing: verified.autoRenewing, cancellationReason: verified.cancellationReason, periodEndsAt: verified.periodEndsAt, lastVerifiedAt: new Date(), seatLimit: product.limits.staffSeats }, { new: true, upsert: true, setDefaultsOnInsert: true });
+  if (['active', 'grace_period'].includes(verified.status)) {
+    try {
+      await acknowledgeGoogle(verified);
+      if (verified.acknowledgementState === 'ACKNOWLEDGEMENT_STATE_PENDING') {
+        await SubscriptionEvent.updateOne({ platform: verified.platform, transactionId: verified.transactionId }, { $set: { acknowledgementState: 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED' } });
+      }
+    } catch (error) {
+      // The app also completes the purchase. A later restore retries server acknowledgement.
+      console.error('Google Play acknowledgement failed', error);
+    }
+  }
+  if (verified.platform === 'google') {
+    try {
+      const order = await lookupGoogleOrder(verified);
+      if (order) await SubscriptionEvent.updateOne({ platform: verified.platform, transactionId: verified.transactionId }, { $set: order });
+    } catch (error) {
+      console.error('Google Play order lookup failed', error);
+    }
+  }
   if (verified.status === 'active') await rewardReferralForStudio(req.auth.studio._id);
   await expireReferrals();
   sendNotification(req.auth.studio._id, {

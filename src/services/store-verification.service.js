@@ -26,6 +26,9 @@ async function verifyGoogle(purchaseToken) {
   const auth = new GoogleAuth({ credentials, scopes: ['https://www.googleapis.com/auth/androidpublisher'] });
   const token = await auth.getAccessToken();
   const response = await fetch(`https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${encodeURIComponent(env.GOOGLE_PLAY_PACKAGE_NAME)}/purchases/subscriptionsv2/tokens/${encodeURIComponent(purchaseToken)}`, { headers: { Authorization: `Bearer ${token}` } });
+  if (response.status === 401 || response.status === 403) {
+    throw new AppError(503, 'GOOGLE_BILLING_ACCESS_DENIED', 'Google Play verification access is not configured for this app.');
+  }
   if (!response.ok) throw new AppError(422, 'GOOGLE_PURCHASE_INVALID', 'Google Play could not verify this purchase.');
   const raw = await response.json(); const line = raw.lineItems?.[0];
   if (!line?.productId || !line.expiryTime) throw new AppError(422, 'GOOGLE_PURCHASE_INVALID', 'Google Play returned an incomplete subscription.');
@@ -40,8 +43,42 @@ async function verifyGoogle(purchaseToken) {
     status: map[raw.subscriptionState] || 'restricted',
     country: raw.regionCode,
     autoRenewing: !!line.autoRenewingPlan?.autoRenewEnabled,
+    acknowledgementState: raw.acknowledgementState,
     cancellationReason: raw.canceledStateContext ? Object.keys(raw.canceledStateContext)[0] : undefined,
     raw,
+  };
+}
+async function acknowledgeGoogle(verified) {
+  if (verified.platform !== 'google' || verified.acknowledgementState !== 'ACKNOWLEDGEMENT_STATE_PENDING') return;
+  const credentials = JSON.parse(env.GOOGLE_SERVICE_ACCOUNT_JSON);
+  const auth = new GoogleAuth({ credentials, scopes: ['https://www.googleapis.com/auth/androidpublisher'] });
+  const token = await auth.getAccessToken();
+  const url = `https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${encodeURIComponent(env.GOOGLE_PLAY_PACKAGE_NAME)}/purchases/subscriptions/${encodeURIComponent(verified.productId)}/tokens/${encodeURIComponent(verified.purchaseToken)}:acknowledge`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+  if (!response.ok) throw new AppError(502, 'GOOGLE_ACKNOWLEDGEMENT_FAILED', 'Google Play could not confirm the subscription yet. Please reopen the app to retry.');
+}
+async function lookupGoogleOrder(verified) {
+  const orderId = verified.raw?.latestOrderId;
+  if (verified.platform !== 'google' || !orderId) return null;
+  const credentials = JSON.parse(env.GOOGLE_SERVICE_ACCOUNT_JSON);
+  const auth = new GoogleAuth({ credentials, scopes: ['https://www.googleapis.com/auth/androidpublisher'] });
+  const token = await auth.getAccessToken();
+  const response = await fetch(`https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${encodeURIComponent(env.GOOGLE_PLAY_PACKAGE_NAME)}/orders/${encodeURIComponent(orderId)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok) return null;
+  const order = await response.json();
+  const total = order.total;
+  return {
+    orderState: order.state,
+    paidCurrency: total?.currencyCode,
+    paidAmountMicros: total ? Number(total.units || 0) * 1000000 + Math.round(Number(total.nanos || 0) / 1000) : undefined,
+    orderCreatedAt: order.createTime ? new Date(order.createTime) : undefined,
   };
 }
 function appleToken() {
@@ -59,4 +96,4 @@ async function verifyApple(transactionId) {
   return { platform: 'apple', transactionId: payload.transactionId, originalTransactionId: payload.originalTransactionId, productId: payload.productId, periodEndsAt: new Date(Number(payload.expiresDate)), status: map[transaction.status] || 'restricted', raw };
 }
 async function verifyPurchase(platform, proof) { return platform === 'google' ? verifyGoogle(proof.purchaseToken) : verifyApple(proof.transactionId); }
-module.exports = { verifyPurchase, planFor };
+module.exports = { verifyPurchase, planFor, acknowledgeGoogle, lookupGoogleOrder };

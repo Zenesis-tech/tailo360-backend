@@ -242,8 +242,8 @@ async function dashboard(req, res) {
       { $sort: { "_id.country": 1, "_id.status": 1 } },
     ]),
     SubscriptionEvent.aggregate([
-      { $match: { verifiedAt: { $gte: month }, priceAmountMicros: { $gt: 0 }, $or: [{ "raw.subscriptionState": "SUBSCRIPTION_STATE_ACTIVE" }, { "raw.subscriptionState": { $exists: false } }] } },
-      { $group: { _id: { country: "$country", currency: "$currency" }, amountMicros: { $sum: "$priceAmountMicros" }, transactions: { $sum: 1 } } },
+      { $match: { verifiedAt: { $gte: month }, orderState: 'PROCESSED', paidAmountMicros: { $gt: 0 } } },
+      { $group: { _id: { country: "$country", currency: "$paidCurrency" }, amountMicros: { $sum: "$paidAmountMicros" }, transactions: { $sum: 1 } } },
       { $sort: { "_id.country": 1 } },
     ]),
   ]);
@@ -1350,6 +1350,7 @@ async function updateTicket(req, res) {
 }
 const configInput = z.object({
   maintenance: z.boolean().default(false),
+  signupTrialDays: z.number().int().min(0).max(365).default(90),
   minimumAndroidVersion: z.string().max(50).optional(),
   minimumIosVersion: z.string().max(50).optional(),
   featureFlags: z.record(z.boolean()).default({}),
@@ -1372,7 +1373,7 @@ async function config(req, res) {
   res.json({
     data: row
       ? { ...row.toObject(), support: { whatsappNumber: '', deliveryMode: 'ticket', ...(row.support?.toObject?.() || row.support || {}) } }
-      : { key: "platform", maintenance: false, featureFlags: {}, supportedCountries: ['IN', 'US', 'CA', 'GB', 'AU'].map((code) => ({ code, active: true, subscriptionsVisible: true })), support: { whatsappNumber: '', deliveryMode: 'ticket' } },
+      : { key: "platform", maintenance: false, signupTrialDays: 90, featureFlags: {}, supportedCountries: ['IN', 'US', 'CA', 'GB', 'AU'].map((code) => ({ code, active: true, subscriptionsVisible: true })), support: { whatsappNumber: '', deliveryMode: 'ticket' } },
   });
 }
 async function updateConfig(req, res) {
@@ -1420,14 +1421,31 @@ async function media(req, res) {
   res.json(result);
 }
 async function subscriptionEvents(req, res) {
-  const result = await list(SubscriptionEvent, {}, { verifiedAt: -1 }, req, {
+  const filter = {};
+  if (req.query.studioId) {
+    if (!/^[a-f\d]{24}$/i.test(req.query.studioId)) throw new AppError(422, 'INVALID_STUDIO_ID', 'Choose a valid studio.');
+    filter.studioId = req.query.studioId;
+  }
+  const result = await list(SubscriptionEvent, filter, { verifiedAt: -1 }, req, {
     path: "studioId",
-    select: "name",
+    select: "name ownerUserId",
+    populate: { path: "ownerUserId", select: "name email phone" },
   });
   res.json({
     data: result.data.map((row) => ({ ...row.toObject(), raw: undefined })),
     meta: result.meta,
   });
+}
+async function refreshSubscriptionOrder(req, res) {
+  const event = await SubscriptionEvent.findById(req.params.id);
+  if (!event) throw notFound('Subscription event');
+  if (event.platform !== 'google') throw new AppError(422, 'ORDER_LOOKUP_UNAVAILABLE', 'Google Play order lookup is available only for Google subscriptions.');
+  const { lookupGoogleOrder } = require('../services/store-verification.service');
+  const order = await lookupGoogleOrder({ platform: 'google', raw: { latestOrderId: event.raw?.latestOrderId || event.transactionId } });
+  if (!order) throw new AppError(404, 'GOOGLE_ORDER_NOT_FOUND', 'Google Play did not return this order. Check its order ID and API permissions.');
+  event.set(order);
+  await event.save();
+  res.json({ data: { ...event.toObject(), raw: undefined } });
 }
 async function audit(req, res) {
   const filter = {};
@@ -1480,5 +1498,6 @@ module.exports = {
   notifications,
   media,
   subscriptionEvents,
+  refreshSubscriptionOrder,
   audit,
 };

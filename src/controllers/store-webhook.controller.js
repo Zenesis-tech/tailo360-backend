@@ -1,5 +1,5 @@
 const { Subscription, SubscriptionEvent } = require('../models');
-const { verifyPurchase, planFor } = require('../services/store-verification.service');
+const { verifyPurchase, planFor, lookupGoogleOrder } = require('../services/store-verification.service');
 const { send: sendNotification } = require('../services/notification.service');
 const realtimeEvents = require('../services/realtime-events.service');
 
@@ -8,7 +8,19 @@ async function applyVerifiedPurchase(verified) {
   if (!event) return false; // Unknown transactions are never attached to a studio.
   const plan = await planFor(verified.productId, verified.platform);
   const subscription = await Subscription.findOneAndUpdate({ studioId: event.studioId }, { plan: plan.code, status: verified.status, platform: verified.platform, entitlementSource: 'store', productId: verified.productId, googlePlaySubscriptionId: verified.platform === 'google' ? verified.productId : undefined, purchaseToken: verified.purchaseToken, originalTransactionId: verified.originalTransactionId, country: verified.country || event.country, currency: event.currency, priceAmountMicros: event.priceAmountMicros, autoRenewing: verified.autoRenewing, cancellationReason: verified.cancellationReason, periodEndsAt: verified.periodEndsAt, lastVerifiedAt: new Date(), seatLimit: plan.limits.staffSeats }, { new: true });
-  await SubscriptionEvent.create({ studioId: event.studioId, platform: verified.platform, transactionId: `${verified.transactionId}:${Date.now()}`, originalTransactionId: verified.originalTransactionId, productId: verified.productId, purchaseToken: verified.purchaseToken, country: verified.country || event.country, currency: event.currency, priceAmountMicros: event.priceAmountMicros, raw: verified.raw });
+  await SubscriptionEvent.findOneAndUpdate(
+    { platform: verified.platform, transactionId: verified.transactionId },
+    { studioId: event.studioId, platform: verified.platform, transactionId: verified.transactionId, originalTransactionId: verified.originalTransactionId, productId: verified.productId, purchaseToken: verified.purchaseToken, country: verified.country || event.country, currency: event.currency, priceAmountMicros: event.priceAmountMicros, status: verified.status, periodEndsAt: verified.periodEndsAt, autoRenewing: verified.autoRenewing, acknowledgementState: verified.acknowledgementState, raw: verified.raw, verifiedAt: new Date() },
+    { upsert: true },
+  );
+  if (verified.platform === 'google') {
+    try {
+      const order = await lookupGoogleOrder(verified);
+      if (order) await SubscriptionEvent.updateOne({ platform: verified.platform, transactionId: verified.transactionId }, { $set: order });
+    } catch (error) {
+      console.error('Google Play renewal order lookup failed', error);
+    }
+  }
   sendNotification(event.studioId, {
     type: verified.status === 'active' ? 'subscription_renewed' : 'subscription_updated',
     title: verified.status === 'active' ? 'Subscription renewed' : 'Subscription updated',

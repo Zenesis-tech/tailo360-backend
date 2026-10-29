@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const { nanoid, customAlphabet } = require('nanoid');
 const env = require('../config/env');
-const { User, Studio, Member, Subscription, ReferralRewardConfig, Session, Referral, SubscriptionPlan } = require('../models');
+const { User, Studio, Member, Subscription, ReferralRewardConfig, Session, Referral, SubscriptionPlan, AppConfig } = require('../models');
 const { provisionStarterGarments } = require('./garment-catalog.service');
 const { rewardReferralForStudio } = require('./subscription-lifecycle.service');
 const { claimNewStudioOffer } = require('./subscription-offer.service');
@@ -13,15 +13,6 @@ const studioPlanDefaults = {
   active: true,
   storeProducts: [],
 };
-function threeMonthsAfter(start) {
-  const end = new Date(start);
-  const day = end.getUTCDate();
-  end.setUTCDate(1);
-  end.setUTCMonth(end.getUTCMonth() + 3);
-  const lastDay = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth() + 1, 0)).getUTCDate();
-  end.setUTCDate(Math.min(day, lastDay));
-  return end;
-}
 const hash = (value) => crypto.createHash('sha256').update(value).digest('hex');
 function tokenPair(user, member) {
   const tokenId = nanoid();
@@ -44,15 +35,15 @@ async function createStudioFor(user, { studioName, referralCode, garmentAudience
     },
   });
   const owner = await Member.create({ studioId: studio._id, userId: user._id, phone: user.phone || `google:${user.googleSubject}`, role: 'owner' });
-  const studioPlan = await SubscriptionPlan.findOneAndUpdate(
+  const [studioPlan, platformConfig] = await Promise.all([SubscriptionPlan.findOneAndUpdate(
     { code: 'studio' },
     { $setOnInsert: studioPlanDefaults },
     { upsert: true, new: true, setDefaultsOnInsert: true },
-  );
+  ), AppConfig.findOne({ key: 'platform' }).select('signupTrialDays')]);
   const trialStartedAt = new Date();
-  const trialEndsAt = threeMonthsAfter(trialStartedAt);
-  const minimumDurationDays = Math.floor((trialEndsAt - trialStartedAt) / 86400000);
-  const claimedOffer = await claimNewStudioOffer(trialStartedAt, minimumDurationDays);
+  const signupTrialDays = platformConfig?.signupTrialDays ?? 90;
+  const trialEndsAt = new Date(trialStartedAt.getTime() + signupTrialDays * 86400000);
+  const claimedOffer = await claimNewStudioOffer(trialStartedAt, signupTrialDays);
   const offer = claimedOffer?.offer;
   const accessEndsAt = offer
     ? new Date(trialStartedAt.getTime() + offer.benefit.durationDays * 86400000)
@@ -91,4 +82,4 @@ async function issueSession(user, member) {
   });
   return pair;
 }
-module.exports = { hash, createStudioFor, issueSession, threeMonthsAfter };
+module.exports = { hash, createStudioFor, issueSession };
