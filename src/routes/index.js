@@ -278,6 +278,7 @@ router.get("/subscription", authenticate, subscriptions.get);
 router.get("/subscription/usage", authenticate, subscriptions.usage);
 router.get("/subscription/plans", authenticate, subscriptions.plans);
 router.get("/subscription/products", authenticate, subscriptions.products);
+router.post('/subscription/report-attempt', authenticate, subscriptions.reportAttempt);
 router.post(
   "/subscription/validate-purchase",
   authenticate,
@@ -395,6 +396,7 @@ router.get("/admin/notifications", authenticate, requirePlatformAdmin, admin.not
 router.post("/admin/notifications/send", authenticate, requirePlatformAdmin, notifications.adminSend);
 router.get("/admin/media", authenticate, requirePlatformAdmin, admin.media);
 router.get("/admin/subscription-events", authenticate, requirePlatformAdmin, admin.subscriptionEvents);
+router.get('/admin/subscription-attempts', authenticate, requirePlatformAdmin, admin.subscriptionAttempts);
 router.post("/admin/subscription-events/:id/refresh-order", authenticate, requirePlatformAdmin, admin.refreshSubscriptionOrder);
 router.get("/admin/audit", authenticate, requirePlatformAdmin, admin.audit);
 router.get("/admin/config", authenticate, requirePlatformAdmin, admin.config);

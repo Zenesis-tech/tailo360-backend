@@ -1,5 +1,6 @@
 const { z } = require('zod');
-const { Subscription, SubscriptionPlan, SubscriptionEvent, SubscriptionOffer, Member, AppConfig } = require('../models');
+const crypto = require('crypto');
+const { Subscription, SubscriptionPlan, SubscriptionEvent, SubscriptionAttempt, SubscriptionOffer, Member, AppConfig } = require('../models');
 const { AppError } = require('../utils/errors');
 const { verifyPurchase, planFor, acknowledgeGoogle, lookupGoogleOrder } = require('../services/store-verification.service');
 const { rewardReferralForStudio, expireReferrals } = require('../services/subscription-lifecycle.service');
@@ -23,9 +24,41 @@ async function usage(req, res) {
 }
 async function plans(req, res) { const rows = await SubscriptionPlan.find({ active: true }).select('code name description monthlyPricePaise yearlyPricePaise limits features storeProducts').sort({ monthlyPricePaise: 1 }); res.json({ data: rows }); }
 async function products(req, res) { const country = req.auth.user.country || 'IN'; const [plans, config] = await Promise.all([SubscriptionPlan.find({ active: true }).sort({ monthlyPricePaise: 1 }), AppConfig.findOne({ key: 'platform' }).select('supportedCountries')]); const control = config?.supportedCountries?.find((item) => item.code === country); if (control && (!control.active || !control.subscriptionsVisible)) return res.json({ data: [] }); const platform = req.query.platform; const data = plans.flatMap((plan) => plan.storeProducts.filter((product) => product.active && (!platform || product.platform === platform) && (!product.countries?.length || product.countries.includes(country))).map((product) => ({ id: product.productId, platform: product.platform, period: product.period, plan: plan.code, name: plan.name, country }))); res.json({ data }); }
+async function reportAttempt(req, res) {
+  const body = z.object({
+    platform: z.enum(['google', 'apple']),
+    stage: z.enum(['pending', 'store_error', 'verification_error']),
+    productId: z.string().max(150).optional(),
+    transactionId: z.string().max(150).optional(),
+    errorCode: z.string().max(100).optional(),
+  }).parse(req.body);
+  await SubscriptionAttempt.create({ studioId: req.auth.studio._id, source: 'app', ...body });
+  res.status(202).json({ data: { recorded: true } });
+}
 async function validatePurchase(req, res) {
   const body = z.object({ platform: z.enum(['google', 'apple']), purchaseToken: z.string().min(10).optional(), transactionId: z.string().min(5).optional(), currency: z.enum(['INR', 'USD', 'CAD', 'GBP', 'AUD']).optional(), priceAmountMicros: z.number().int().nonnegative().max(1000000000000).optional() }).superRefine((value, context) => { if (value.platform === 'google' && !value.purchaseToken) context.addIssue({ code: 'custom', message: 'purchaseToken is required.' }); if (value.platform === 'apple' && !value.transactionId) context.addIssue({ code: 'custom', message: 'transactionId is required.' }); }).parse(req.body);
-  const verified = await verifyPurchase(body.platform, body); const product = await planFor(verified.productId, verified.platform);
+  let verified;
+  let product;
+  try {
+    verified = await verifyPurchase(body.platform, body);
+    product = await planFor(verified.productId, verified.platform);
+  } catch (error) {
+    try {
+      await SubscriptionAttempt.create({
+        studioId: req.auth.studio._id,
+        platform: body.platform,
+        source: 'backend',
+        stage: 'verification_error',
+        productId: verified?.productId,
+        transactionId: body.platform === 'apple' ? body.transactionId : undefined,
+        errorCode: error.code || 'VERIFICATION_ERROR',
+        tokenHash: body.purchaseToken ? crypto.createHash('sha256').update(body.purchaseToken).digest('hex') : undefined,
+      });
+    } catch (recordError) {
+      console.error('Could not record subscription verification failure', recordError);
+    }
+    throw error;
+  }
   const supportedCountries = ['IN', 'US', 'CA', 'GB', 'AU'];
   const country = supportedCountries.includes(verified.country) ? verified.country : (req.auth.user.country || 'IN');
   const currency = body.currency || req.auth.user.currency || 'INR';
@@ -127,4 +160,4 @@ const offerInput = z.object({
 async function adminListOffers(req, res) { res.json({ data: await SubscriptionOffer.find().sort({ createdAt: -1 }) }); }
 async function adminCreateOffer(req, res) { const offer = await SubscriptionOffer.create(offerInput.parse(req.body)); await auditAdmin(req, 'subscription_offer.created', 'subscription_offer', offer, undefined, offer); res.status(201).json({ data: offer }); }
 async function adminUpdateOffer(req, res) { const before = await SubscriptionOffer.findById(req.params.id); const offer = await SubscriptionOffer.findByIdAndUpdate(req.params.id, offerInput.partial().parse(req.body), { new: true, runValidators: true }); if (!offer) throw new AppError(404, 'NOT_FOUND', 'Subscription offer was not found.'); await auditAdmin(req, 'subscription_offer.updated', 'subscription_offer', offer, before, offer); res.json({ data: offer }); }
-module.exports = { get, usage, plans, products, validatePurchase, adminListPlans, adminRefreshPlayPrices, adminCreatePlan, adminUpdatePlan, adminListOffers, adminCreateOffer, adminUpdateOffer };
+module.exports = { get, usage, plans, products, reportAttempt, validatePurchase, adminListPlans, adminRefreshPlayPrices, adminCreatePlan, adminUpdatePlan, adminListOffers, adminCreateOffer, adminUpdateOffer };

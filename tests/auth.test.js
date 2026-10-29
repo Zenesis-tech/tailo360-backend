@@ -149,6 +149,30 @@ test('admin can see a studio owner and refresh a verified Google order', async (
   }
 });
 
+test('payment issues are visible to admins without exposing purchase tokens or claiming a charge', async () => {
+  const { SubscriptionAttempt, User } = require('../src/models');
+  const account = await createAccount('+919876543214');
+  await User.updateOne({ _id: account.body.data.user.id }, { platformRole: 'admin' });
+  const authorization = `Bearer ${account.body.data.accessToken}`;
+  await request(app).post('/api/v1/subscription/report-attempt')
+    .set('Authorization', authorization)
+    .send({ platform: 'google', stage: 'store_error', productId: 'studio-monthly', errorCode: 'billing_unavailable' })
+    .expect(202);
+  await request(app).post('/api/v1/subscription/validate-purchase')
+    .set('Authorization', authorization)
+    .send({ platform: 'google', purchaseToken: 'test-purchase-token-123' })
+    .expect(503);
+  const result = await request(app).get('/api/v1/admin/subscription-attempts')
+    .set('Authorization', authorization).expect(200);
+  const attempts = result.body.data.filter((row) => row.studioId?._id === account.body.data.studioId);
+  expect(attempts).toEqual(expect.arrayContaining([
+    expect.objectContaining({ source: 'app', stage: 'store_error' }),
+    expect.objectContaining({ source: 'backend', stage: 'verification_error', errorCode: 'GOOGLE_BILLING_NOT_CONFIGURED' }),
+  ]));
+  expect(JSON.stringify(attempts)).not.toContain('test-purchase-token-123');
+  expect(await SubscriptionAttempt.countDocuments({ studioId: account.body.data.studioId })).toBe(2);
+});
+
 test('international OTP persists an E.164 identity and regional profile', async () => {
   const verified = await createAccount('+61412345678', {
     country: 'AU',

@@ -12,6 +12,7 @@ const {
   Subscription,
   SubscriptionPlan,
   SubscriptionEvent,
+  SubscriptionAttempt,
   Referral,
   SupportTicket,
   Notification,
@@ -1436,6 +1437,19 @@ async function subscriptionEvents(req, res) {
     meta: result.meta,
   });
 }
+async function subscriptionAttempts(req, res) {
+  const filter = {};
+  if (req.query.studioId) {
+    if (!/^[a-f\d]{24}$/i.test(req.query.studioId)) throw new AppError(422, 'INVALID_STUDIO_ID', 'Choose a valid studio.');
+    filter.studioId = req.query.studioId;
+  }
+  const result = await list(SubscriptionAttempt, filter, { observedAt: -1 }, req, {
+    path: 'studioId',
+    select: 'name ownerUserId',
+    populate: { path: 'ownerUserId', select: 'name email phone' },
+  });
+  res.json(result);
+}
 async function refreshSubscriptionOrder(req, res) {
   const event = await SubscriptionEvent.findById(req.params.id);
   if (!event) throw notFound('Subscription event');
@@ -1498,6 +1512,7 @@ module.exports = {
   notifications,
   media,
   subscriptionEvents,
+  subscriptionAttempts,
   refreshSubscriptionOrder,
   audit,
 };

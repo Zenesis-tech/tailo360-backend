@@ -679,6 +679,21 @@ subscriptionEventSchema.index(
   { platform: 1, transactionId: 1 },
   { unique: true },
 );
+const subscriptionAttemptSchema = new Schema(
+  {
+    studioId: { type: Schema.Types.ObjectId, ref: 'Studio', required: true, index: true },
+    platform: { type: String, enum: ['google', 'apple'], required: true },
+    source: { type: String, enum: ['app', 'backend'], required: true },
+    stage: { type: String, enum: ['pending', 'store_error', 'verification_error'], required: true },
+    productId: String,
+    transactionId: String,
+    errorCode: String,
+    tokenHash: { type: String, select: false },
+    observedAt: { type: Date, default: Date.now, index: true },
+  },
+  base,
+);
+subscriptionAttemptSchema.index({ studioId: 1, observedAt: -1 });
 const deviceSchema = new Schema(
   {
     userId: {
@@ -880,6 +895,7 @@ module.exports = {
   SubscriptionPlan: model("SubscriptionPlan", subscriptionPlanSchema),
   SubscriptionOffer: model("SubscriptionOffer", subscriptionOfferSchema),
   SubscriptionEvent: model("SubscriptionEvent", subscriptionEventSchema),
+  SubscriptionAttempt: model('SubscriptionAttempt', subscriptionAttemptSchema),
   Referral: model("Referral", referralSchema),
   ReferralRewardConfig: model(
     "ReferralRewardConfig",
