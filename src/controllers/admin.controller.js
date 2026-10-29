@@ -25,6 +25,7 @@ const {
 const { AppError, notFound } = require("../utils/errors");
 const { hashPassword } = require("../services/password.service");
 const { purgeAccountImmediately } = require("../services/account-purge.service");
+const storeVerification = require("../services/store-verification.service");
 const realtimeEvents = require("../services/realtime-events.service");
 
 async function publishTemplateChange(template, action = "updated") {
@@ -366,20 +367,38 @@ async function updateUser(req, res) {
   await auditAdmin(req, Object.keys(changes).length === 1 && changes.platformRole ? "user.platform_role_updated" : "user.updated", "user", user, before, user.toObject());
   res.json({ data: user });
 }
+async function deletionStorePurchases(studioIds) {
+  if (!studioIds.length) return [];
+  const [subscriptions, events] = await Promise.all([
+    Subscription.find({ studioId: { $in: studioIds }, $or: [{ entitlementSource: "store" }, { platform: { $in: ["google", "apple"] } }] })
+      .select("+purchaseToken studioId platform productId status autoRenewing periodEndsAt").lean(),
+    SubscriptionEvent.find({ studioId: { $in: studioIds }, $or: [
+      { autoRenewing: true },
+      { status: { $in: ["active", "grace_period", "restricted"] } },
+      { periodEndsAt: { $gt: new Date() } },
+    ] }).select("+purchaseToken studioId platform productId status autoRenewing periodEndsAt").lean(),
+  ]);
+  const byPurchase = new Map();
+  for (const row of [...subscriptions, ...events]) {
+    const key = `${row.platform}:${row.purchaseToken || row._id}`;
+    if (!byPurchase.has(key)) byPurchase.set(key, row);
+  }
+  return [...byPurchase.values()];
+}
 async function userDeletionImpact(req, res) {
   const user = await User.findById(req.params.id);
   if (!user || user.deletedAt) throw notFound("User");
   const studios = await Studio.find({ ownerUserId: user._id }).select("_id name").lean();
-  const subscriptions = studios.length
-    ? await Subscription.find({ studioId: { $in: studios.map((studio) => studio._id) }, entitlementSource: "store" })
-      .select("studioId platform productId status autoRenewing").lean()
-    : [];
-  const byStudio = new Map(subscriptions.map((row) => [String(row.studioId), row]));
+  const purchases = await deletionStorePurchases(studios.map((studio) => studio._id));
+  const byStudio = new Map();
+  for (const purchase of purchases) byStudio.set(String(purchase.studioId), purchase.platform);
   res.json({ data: {
     ownedStudios: studios.map((studio) => ({
       id: String(studio._id), name: studio.name,
-      storeSubscription: byStudio.get(String(studio._id)) || null,
+      storePlatform: byStudio.get(String(studio._id)) || null,
     })),
+    googlePurchasesToCheck: purchases.filter((row) => row.platform === "google").length,
+    unsupportedStorePurchases: purchases.filter((row) => row.platform !== "google").length,
   } });
 }
 async function deleteUser(req, res) {
@@ -396,20 +415,23 @@ async function deleteUser(req, res) {
   if (user.platformRole === "admin" && await User.countDocuments({ platformRole: "admin", deletedAt: null }) <= 1)
     throw new AppError(422, "LAST_ADMIN", "The last platform administrator cannot be deleted.");
   const ownedStudios = await Studio.find({ ownerUserId: user._id }).select("_id name").lean();
-  const storeSubscriptions = ownedStudios.length
-    ? await Subscription.find({ studioId: { $in: ownedStudios.map((studio) => studio._id) }, entitlementSource: "store" })
-      .select("platform productId status autoRenewing").lean()
-    : [];
+  const purchases = await deletionStorePurchases(ownedStudios.map((studio) => studio._id));
+  if (purchases.some((row) => row.platform !== "google"))
+    throw new AppError(409, "STORE_CANCELLATION_UNSUPPORTED", "This studio has an App Store or unknown store purchase. Automatic cancellation is unavailable, so deletion was stopped.");
+  if (purchases.some((row) => !row.purchaseToken))
+    throw new AppError(409, "GOOGLE_PURCHASE_TOKEN_MISSING", "A Google Play purchase has no saved token. Deletion was stopped because future payments cannot be checked.");
+  for (const purchase of purchases)
+    await storeVerification.stopGooglePaymentsForDeletion(purchase.purchaseToken);
   const deleted = await purgeAccountImmediately(user._id);
   if (!deleted) throw new AppError(409, "DELETE_CONFLICT", "This user is already being deleted. Refresh and try again.");
   await auditAdmin(req, "user.deleted_permanently", "user", user._id, undefined, {
     ownedStudioCount: ownedStudios.length,
-    storeBillingRequiresReview: storeSubscriptions.some((row) => row.autoRenewing),
+    googlePurchasesChecked: purchases.length,
   });
   res.json({ data: {
     deleted: true,
     ownedStudioCount: ownedStudios.length,
-    storeBillingRequiresReview: storeSubscriptions.some((row) => row.autoRenewing),
+    googlePurchasesChecked: purchases.length,
   } });
 }
 async function resetUserPassword(req, res) {

@@ -25,7 +25,7 @@ async function verifyGoogle(purchaseToken) {
   let credentials; try { credentials = JSON.parse(env.GOOGLE_SERVICE_ACCOUNT_JSON); } catch (_) { throw new AppError(500, 'GOOGLE_BILLING_CONFIG_INVALID', 'Google Play service-account configuration is invalid.'); }
   const auth = new GoogleAuth({ credentials, scopes: ['https://www.googleapis.com/auth/androidpublisher'] });
   const token = await auth.getAccessToken();
-  const response = await fetch(`https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${encodeURIComponent(env.GOOGLE_PLAY_PACKAGE_NAME)}/purchases/subscriptionsv2/tokens/${encodeURIComponent(purchaseToken)}`, { headers: { Authorization: `Bearer ${token}` } });
+  const response = await fetch(`https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${encodeURIComponent(env.GOOGLE_PLAY_PACKAGE_NAME)}/purchases/subscriptionsv2/tokens/${encodeURIComponent(purchaseToken)}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10000) });
   if (response.status === 401 || response.status === 403) {
     throw new AppError(503, 'GOOGLE_BILLING_ACCESS_DENIED', 'Google Play verification access is not configured for this app.');
   }
@@ -47,6 +47,42 @@ async function verifyGoogle(purchaseToken) {
     cancellationReason: raw.canceledStateContext ? Object.keys(raw.canceledStateContext)[0] : undefined,
     raw,
   };
+}
+async function stopGooglePaymentsForDeletion(purchaseToken) {
+  let verified;
+  try {
+    verified = await verifyGoogle(purchaseToken);
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    throw new AppError(503, 'GOOGLE_CANCEL_CHECK_FAILED', 'Google Play could not be reached to check this subscription. The account was not deleted.');
+  }
+  const state = verified.raw.subscriptionState;
+  if (state === 'SUBSCRIPTION_STATE_EXPIRED' || state === 'SUBSCRIPTION_STATE_PENDING_PURCHASE_CANCELED' ||
+      (state === 'SUBSCRIPTION_STATE_CANCELED' && verified.raw.lineItems?.every((line) => !line.autoRenewingPlan?.autoRenewEnabled && !line.autoRenewingPlan?.installmentDetails)) ||
+      verified.raw.lineItems?.every((line) => line.prepaidPlan)) {
+    return { alreadyStopped: true };
+  }
+  if (!['SUBSCRIPTION_STATE_ACTIVE', 'SUBSCRIPTION_STATE_IN_GRACE_PERIOD', 'SUBSCRIPTION_STATE_ON_HOLD',
+    'SUBSCRIPTION_STATE_PAUSED', 'SUBSCRIPTION_STATE_CANCELED'].includes(state)) {
+    throw new AppError(409, 'GOOGLE_PURCHASE_STATE_UNKNOWN', 'Google Play could not confirm that future payments are stopped. Deletion was stopped.');
+  }
+  const credentials = JSON.parse(env.GOOGLE_SERVICE_ACCOUNT_JSON);
+  const auth = new GoogleAuth({ credentials, scopes: ['https://www.googleapis.com/auth/androidpublisher'] });
+  const token = await auth.getAccessToken();
+  let response;
+  try {
+    response = await fetch(`https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${encodeURIComponent(env.GOOGLE_PLAY_PACKAGE_NAME)}/purchases/subscriptionsv2/tokens/${encodeURIComponent(purchaseToken)}:cancel`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cancellationContext: { cancellationType: 'DEVELOPER_REQUESTED_STOP_PAYMENTS' } }),
+      signal: AbortSignal.timeout(10000),
+    });
+  } catch (_) {
+    throw new AppError(503, 'GOOGLE_CANCEL_UNAVAILABLE', 'Google Play could not be reached to stop future payments. The account was not deleted.');
+  }
+  if (!response.ok)
+    throw new AppError(502, 'GOOGLE_CANCEL_FAILED', 'Google Play did not confirm payment cancellation. The account was not deleted.');
+  return { alreadyStopped: false };
 }
 async function acknowledgeGoogle(verified) {
   if (verified.platform !== 'google' || verified.acknowledgementState !== 'ACKNOWLEDGEMENT_STATE_PENDING') return;
@@ -96,4 +132,4 @@ async function verifyApple(transactionId) {
   return { platform: 'apple', transactionId: payload.transactionId, originalTransactionId: payload.originalTransactionId, productId: payload.productId, periodEndsAt: new Date(Number(payload.expiresDate)), status: map[transaction.status] || 'restricted', raw };
 }
 async function verifyPurchase(platform, proof) { return platform === 'google' ? verifyGoogle(proof.purchaseToken) : verifyApple(proof.transactionId); }
-module.exports = { verifyPurchase, planFor, acknowledgeGoogle, lookupGoogleOrder };
+module.exports = { verifyPurchase, planFor, acknowledgeGoogle, lookupGoogleOrder, stopGooglePaymentsForDeletion };

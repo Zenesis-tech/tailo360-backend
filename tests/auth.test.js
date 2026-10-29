@@ -628,6 +628,8 @@ test('platform admin permanently deletes an owner and all owned studio records i
   const admin = await createAccount('+918800000291');
   const owner = await createAccount('+918800000292');
   const { User, Studio, Customer, Subscription, SubscriptionAttempt, AuditLog } = require('../src/models');
+  const storeVerification = require('../src/services/store-verification.service');
+  const cancelSpy = jest.spyOn(storeVerification, 'stopGooglePaymentsForDeletion').mockResolvedValue({ alreadyStopped: false });
   await User.updateOne({ _id: admin.body.data.user.id }, { platformRole: 'admin' });
   const adminToken = `Bearer ${admin.body.data.accessToken}`;
   const ownerId = owner.body.data.user.id;
@@ -637,21 +639,24 @@ test('platform admin permanently deletes an owner and all owned studio records i
   await SubscriptionAttempt.create({ studioId, platform: 'google', source: 'app', stage: 'pending' });
   await Subscription.updateOne({ studioId }, {
     entitlementSource: 'store', platform: 'google', productId: 'tailo360_monthly',
-    status: 'active', autoRenewing: true,
+    status: 'active', autoRenewing: true, purchaseToken: 'play-purchase-test-292',
   });
 
   const impact = await request(app).get(`/api/v1/admin/users/${ownerId}/deletion-impact`)
     .set('Authorization', adminToken).expect(200);
   expect(impact.body.data.ownedStudios).toEqual([expect.objectContaining({
-    name: 'Needle & Thread', storeSubscription: expect.objectContaining({ autoRenewing: true }),
+    name: 'Needle & Thread', storePlatform: 'google',
   })]);
+  expect(impact.body.data.googlePurchasesToCheck).toBe(1);
   await request(app).delete(`/api/v1/admin/users/${ownerId}`)
     .set('Authorization', adminToken).send({ confirmation: 'delete', version }).expect(422);
   await request(app).delete(`/api/v1/admin/users/${admin.body.data.user.id}`)
     .set('Authorization', adminToken).send({ confirmation: 'DELETE' }).expect(422);
   const deleted = await request(app).delete(`/api/v1/admin/users/${ownerId}`)
     .set('Authorization', adminToken).send({ confirmation: 'DELETE', version }).expect(200);
-  expect(deleted.body.data).toMatchObject({ deleted: true, ownedStudioCount: 1, storeBillingRequiresReview: true });
+  expect(deleted.body.data).toMatchObject({ deleted: true, ownedStudioCount: 1, googlePurchasesChecked: 1 });
+  expect(cancelSpy).toHaveBeenCalledWith('play-purchase-test-292');
+  cancelSpy.mockRestore();
   expect(await User.findById(ownerId)).toBeNull();
   expect(await Studio.findById(studioId)).toBeNull();
   expect(await Customer.countDocuments({ studioId })).toBe(0);
@@ -677,6 +682,48 @@ test('platform admin deleting staff leaves the shared owner studio in place', as
   expect(await User.findById(staffId)).toBeNull();
   expect(await Member.countDocuments({ userId: staffId })).toBe(0);
   expect(await Studio.countDocuments({ _id: owner.body.data.studioId })).toBe(1);
+});
+
+test('admin deletion stops if an older Play purchase cannot be cancelled', async () => {
+  const admin = await createAccount('+918800000296');
+  const owner = await createAccount('+918800000297');
+  const { User, Studio, Subscription, SubscriptionEvent } = require('../src/models');
+  const storeVerification = require('../src/services/store-verification.service');
+  await User.updateOne({ _id: admin.body.data.user.id }, { platformRole: 'admin' });
+  const studioId = owner.body.data.studioId;
+  const ownerId = owner.body.data.user.id;
+  await Subscription.updateOne({ studioId }, { entitlementSource: 'admin_test', status: 'active' });
+  await SubscriptionEvent.create({ studioId, platform: 'google', transactionId: 'GPA.DELETE.297',
+    productId: 'tailo360_monthly', purchaseToken: 'older-play-token-297', status: 'active', autoRenewing: true });
+  const cancelSpy = jest.spyOn(storeVerification, 'stopGooglePaymentsForDeletion')
+    .mockRejectedValueOnce(new Error('Play unavailable'))
+    .mockResolvedValueOnce({ alreadyStopped: false });
+  const url = `/api/v1/admin/users/${ownerId}`;
+  const authorization = `Bearer ${admin.body.data.accessToken}`;
+  await request(app).delete(url).set('Authorization', authorization)
+    .send({ confirmation: 'DELETE' }).expect(500);
+  expect(await User.findById(ownerId)).not.toBeNull();
+  expect(await Studio.findById(studioId)).not.toBeNull();
+  await request(app).delete(url).set('Authorization', authorization)
+    .send({ confirmation: 'DELETE' }).expect(200);
+  expect(cancelSpy).toHaveBeenCalledTimes(2);
+  expect(cancelSpy).toHaveBeenCalledWith('older-play-token-297');
+  expect(await Studio.findById(studioId)).toBeNull();
+  cancelSpy.mockRestore();
+});
+
+test('admin deletion blocks App Store purchases that cannot be cancelled automatically', async () => {
+  const admin = await createAccount('+918800000298');
+  const owner = await createAccount('+918800000299');
+  const { User, Studio, SubscriptionEvent } = require('../src/models');
+  await User.updateOne({ _id: admin.body.data.user.id }, { platformRole: 'admin' });
+  await SubscriptionEvent.create({ studioId: owner.body.data.studioId, platform: 'apple',
+    transactionId: 'apple-delete-299', productId: 'tailo360.5staff.monthly', status: 'active' });
+  await request(app).delete(`/api/v1/admin/users/${owner.body.data.user.id}`)
+    .set('Authorization', `Bearer ${admin.body.data.accessToken}`)
+    .send({ confirmation: 'DELETE' }).expect(409);
+  expect(await User.findById(owner.body.data.user.id)).not.toBeNull();
+  expect(await Studio.findById(owner.body.data.studioId)).not.toBeNull();
 });
 
 test('the enabled demo account uses an isolated, reusable seeded studio', async () => {
