@@ -11,6 +11,7 @@ const {
   Order,
   Subscription,
   SubscriptionEvent,
+  SubscriptionAttempt,
   Referral,
   Idempotency,
   Media,
@@ -180,6 +181,7 @@ async function purgeAccount(userId, now = new Date()) {
         Order.deleteMany(studioFilter),
         Subscription.deleteMany(studioFilter),
         SubscriptionEvent.deleteMany(studioFilter),
+        SubscriptionAttempt.deleteMany(studioFilter),
         Referral.deleteMany({
           $or: [
             { referrerStudioId: { $in: studioIds } },
@@ -254,4 +256,14 @@ async function purgeExpiredAccounts(now = new Date(), { limit = 20 } = {}) {
   return { scanned: candidates.length, purged, failures };
 }
 
-module.exports = { purgeAccount, purgeExpiredAccounts };
+async function purgeAccountImmediately(userId, now = new Date()) {
+  const marked = await User.findOneAndUpdate(
+    { _id: userId, deletedAt: null },
+    { $set: { deletionRequestedAt: now, deletionScheduledFor: now, purgeStartedAt: null, purgeLastError: null } },
+    { new: true },
+  );
+  if (!marked) return false;
+  return purgeAccount(userId, now);
+}
+
+module.exports = { purgeAccount, purgeExpiredAccounts, purgeAccountImmediately };

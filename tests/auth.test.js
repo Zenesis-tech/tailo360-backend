@@ -624,6 +624,61 @@ test('expired staff deletion removes identity without deleting the shared studio
   expect(r2.deleteObject).not.toHaveBeenCalledWith(`${studioId}/fabric/shared-214.jpg`);
 });
 
+test('platform admin permanently deletes an owner and all owned studio records immediately', async () => {
+  const admin = await createAccount('+918800000291');
+  const owner = await createAccount('+918800000292');
+  const { User, Studio, Customer, Subscription, SubscriptionAttempt, AuditLog } = require('../src/models');
+  await User.updateOne({ _id: admin.body.data.user.id }, { platformRole: 'admin' });
+  const adminToken = `Bearer ${admin.body.data.accessToken}`;
+  const ownerId = owner.body.data.user.id;
+  const studioId = owner.body.data.studioId;
+  const version = (await User.findById(ownerId)).version;
+  await Customer.create({ studioId, name: 'Delete With Studio', phone: '+918800001292' });
+  await SubscriptionAttempt.create({ studioId, platform: 'google', source: 'app', stage: 'pending' });
+  await Subscription.updateOne({ studioId }, {
+    entitlementSource: 'store', platform: 'google', productId: 'tailo360_monthly',
+    status: 'active', autoRenewing: true,
+  });
+
+  const impact = await request(app).get(`/api/v1/admin/users/${ownerId}/deletion-impact`)
+    .set('Authorization', adminToken).expect(200);
+  expect(impact.body.data.ownedStudios).toEqual([expect.objectContaining({
+    name: 'Needle & Thread', storeSubscription: expect.objectContaining({ autoRenewing: true }),
+  })]);
+  await request(app).delete(`/api/v1/admin/users/${ownerId}`)
+    .set('Authorization', adminToken).send({ confirmation: 'delete', version }).expect(422);
+  await request(app).delete(`/api/v1/admin/users/${admin.body.data.user.id}`)
+    .set('Authorization', adminToken).send({ confirmation: 'DELETE' }).expect(422);
+  const deleted = await request(app).delete(`/api/v1/admin/users/${ownerId}`)
+    .set('Authorization', adminToken).send({ confirmation: 'DELETE', version }).expect(200);
+  expect(deleted.body.data).toMatchObject({ deleted: true, ownedStudioCount: 1, storeBillingRequiresReview: true });
+  expect(await User.findById(ownerId)).toBeNull();
+  expect(await Studio.findById(studioId)).toBeNull();
+  expect(await Customer.countDocuments({ studioId })).toBe(0);
+  expect(await Subscription.countDocuments({ studioId })).toBe(0);
+  expect(await SubscriptionAttempt.countDocuments({ studioId })).toBe(0);
+  expect(await AuditLog.countDocuments({ action: 'user.deleted_permanently', targetId: ownerId })).toBe(1);
+});
+
+test('platform admin deleting staff leaves the shared owner studio in place', async () => {
+  const admin = await createAccount('+918800000293');
+  const owner = await createAccount('+918800000294');
+  const staffPhone = '+918800000295';
+  const { User, Studio, Member } = require('../src/models');
+  await User.updateOne({ _id: admin.body.data.user.id }, { platformRole: 'admin' });
+  await request(app).post('/api/v1/studio/members')
+    .set('Authorization', `Bearer ${owner.body.data.accessToken}`)
+    .send({ name: 'Delete Staff', phone: staffPhone, role: 'front_desk' }).expect(201);
+  const staff = await createAccount(staffPhone);
+  const staffId = staff.body.data.user.id;
+  await request(app).delete(`/api/v1/admin/users/${staffId}`)
+    .set('Authorization', `Bearer ${admin.body.data.accessToken}`)
+    .send({ confirmation: 'DELETE' }).expect(200);
+  expect(await User.findById(staffId)).toBeNull();
+  expect(await Member.countDocuments({ userId: staffId })).toBe(0);
+  expect(await Studio.countDocuments({ _id: owner.body.data.studioId })).toBe(1);
+});
+
 test('the enabled demo account uses an isolated, reusable seeded studio', async () => {
   const env = require('../src/config/env');
   const previous = env.DEMO_ACCOUNT_ENABLED;

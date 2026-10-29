@@ -333,6 +333,8 @@ router.post(
 router.get("/admin/dashboard", authenticate, requirePlatformAdmin, admin.dashboard);
 router.get("/admin/users", authenticate, requirePlatformAdmin, admin.users);
 router.patch("/admin/users/:id", authenticate, requirePlatformAdmin, admin.updateUser);
+router.get("/admin/users/:id/deletion-impact", authenticate, requirePlatformAdmin, admin.userDeletionImpact);
+router.delete("/admin/users/:id", authenticate, requirePlatformAdmin, admin.deleteUser);
 router.put("/admin/users/:id/password", authenticate, requirePlatformAdmin, admin.resetUserPassword);
 router.get("/admin/studios", authenticate, requirePlatformAdmin, admin.studios);
 router.get("/admin/studios/:id", authenticate, requirePlatformAdmin, admin.studio);
